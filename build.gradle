@@ -1,0 +1,15 @@
+// 顶层构建文件。版本组合 Gradle 8.2 + AGP 8.2.0 + Kotlin 1.9.20 已在本机缓存里，可离线构建。
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath 'com.android.tools.build:gradle:8.2.0'
+        classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.20'
+    }
+}
+
+tasks.register('clean', Delete) {
+    delete rootProject.layout.buildDirectory
+}

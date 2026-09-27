@@ -1,0 +1,76 @@
+// Android application module：只放适配层（WebView / TTS / 相机 / 语音 / HTTPS）。
+// 零第三方依赖，逻辑全在 :core 里，方便单测。
+apply plugin: 'com.android.application'
+apply plugin: 'org.jetbrains.kotlin.android'
+
+// 真 HTTPS 的端点 / 模型 / key 从 local.properties 读（那份文件不进版本库，和 sdk.dir 一起）。
+// 注意 key 会**明文编进 BuildConfig**：自用没问题，构建产物别给别人。
+def duckProps = new Properties()
+def duckPropsFile = rootProject.file('local.properties')
+if (duckPropsFile.exists()) {
+    duckPropsFile.withInputStream { duckProps.load(it) }
+}
+def duckProp = { String name, String fallback ->
+    duckProps.getProperty(name, fallback).replace('\\', '\\\\').replace('"', '\\"')
+}
+
+android {
+    namespace 'com.fanduck.agent'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'com.fanduck.agent'
+        minSdk 28
+        targetSdk 34
+        versionCode 1
+        versionName '0.1.0'
+
+        buildConfigField 'String', 'DUCK_ENDPOINT',
+                "\"${duckProp('duck.endpoint', 'https://api.deepseek.com/chat/completions')}\""
+        buildConfigField 'String', 'DUCK_MODEL', "\"${duckProp('duck.model', 'deepseek-chat')}\""
+        buildConfigField 'String', 'DUCK_API_KEY', "\"${duckProp('duck.apiKey', '')}\""
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    buildFeatures {
+        buildConfig true   // 调试用的 url 入口只在 debug 构建生效
+        compose true       // 只有日志页（LogActivity）用 Compose
+    }
+
+    composeOptions {
+        // 和 Kotlin 1.9.20 配对的编译器版本，本机 Gradle 缓存里已有
+        kotlinCompilerExtensionVersion '1.5.4'
+    }
+
+    sourceSets {
+        main {
+            kotlin.srcDirs += 'src/main/kotlin'
+            assets.srcDirs += 'src/main/assets'
+        }
+    }
+}
+
+tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
+    kotlinOptions { jvmTarget = '1.8' }
+}
+
+dependencies {
+    implementation project(':core')
+
+    // 只有日志页（LogActivity）用 Compose —— 这是 app 模块唯一的第三方依赖。
+    implementation platform('androidx.compose:compose-bom:2023.10.01')
+    implementation 'androidx.activity:activity-compose:1.8.1'
+    implementation 'androidx.compose.ui:ui'
+    implementation 'androidx.compose.foundation:foundation'
+    implementation 'androidx.compose.material3:material3'
+}

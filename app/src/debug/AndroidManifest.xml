@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 只在 debug 构建生效：允许明文 HTTP，好让 app 对着本机的假云端
+     （http://10.0.2.2:8765/chat/completions）跑，验证请求体、SSE 解析、8 秒超时和重试。
+     release 构建不合并这份文件。 -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application android:usesCleartextTraffic="true" />
+</manifest>

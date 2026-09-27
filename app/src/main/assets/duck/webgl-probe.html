@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>webgl probe</title>
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; background: #111111; overflow: hidden; }
+  canvas { display: block; position: absolute; top: 0; width: 50%; height: 100%; }
+  #a { left: 0; }
+  #b { left: 50%; }
+</style>
+</head>
+<body>
+<canvas id="a"></canvas>
+<canvas id="b"></canvas>
+<script>
+// 并排对照：左 alpha:true（品红），右 alpha:false（青）。
+// 左黑右青 => 透明 WebGL surface 不被合成；两边都黑 => 这个 WebView 根本不上屏 WebGL。
+function setup(id, attrs, color) {
+  var c = document.getElementById(id);
+  var gl = c.getContext('webgl', attrs) || c.getContext('experimental-webgl', attrs);
+  if (!gl) { console.log('probe2 ' + id + ' no context'); return; }
+  var logged = false;
+  (function loop() {
+    // 每帧自尺寸：页面脚本可能在布局完成之前执行，那时 innerWidth/innerHeight 是 0
+    var w = Math.floor(window.innerWidth / 2);
+    var h = window.innerHeight;
+    if (w > 0 && h > 0 && (c.width !== w || c.height !== h)) {
+      c.width = w;
+      c.height = h;
+    }
+    if (c.width > 0 && c.height > 0) {
+      gl.viewport(0, 0, c.width, c.height);
+      gl.clearColor(color[0], color[1], color[2], 1);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+    }
+    if (!logged && c.width > 0) {
+      logged = true;
+      console.log('probe2 ' + id + ' ok ' + c.width + 'x' + c.height);
+    }
+    requestAnimationFrame(loop);
+  })();
+}
+setup('a', { alpha: true, antialias: true }, [1, 0, 1]);    // 品红
+setup('b', { alpha: false, antialias: true }, [0, 1, 1]);   // 青
+</script>
+</body>
+</html>

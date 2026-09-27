@@ -1,0 +1,31 @@
+// 纯 Kotlin/JVM 模块：规格第 1 节里"只测 Episode.kt 到 AgentLoop.kt，再加 DuckMotion.kt"的部分。
+// 做成 JVM 模块而不是 Android library，是为了 ./gradlew :core:test 完全不需要 SDK/模拟器。
+apply plugin: 'org.jetbrains.kotlin.jvm'
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_1_8
+    targetCompatibility = JavaVersion.VERSION_1_8
+}
+
+compileKotlin {
+    kotlinOptions { jvmTarget = '1.8' }
+}
+compileTestKotlin {
+    kotlinOptions { jvmTarget = '1.8' }
+}
+
+dependencies {
+    // compileOnly：Android 运行时自带 org.json，不重复打进 APK；
+    // testImplementation：JVM 单测用真实现，绕开规格 §3.4 说的"Android 单测里 org.json 是空壳"。
+    compileOnly 'org.json:json:20231013'
+    testImplementation 'org.json:json:20231013'
+    testImplementation 'junit:junit:4.13.2'
+}
+
+tasks.withType(Test).configureEach {
+    testLogging {
+        events 'passed', 'failed', 'skipped'
+        exceptionFormat 'full'
+        showStandardStreams = false
+    }
+}

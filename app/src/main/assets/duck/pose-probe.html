@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>pose probe</title>
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; background: #0b0f14; overflow: hidden; }
+  canvas { display: block; }
+</style>
+</head>
+<body>
+<script src="three.min.js"></script>
+<script src="duck-meshes.js"></script>
+<script src="duck.js"></script>
+<script>
+// 姿态探针：固定渲染一组 15 个关节角，用来核对 §6.2 的符号约定。
+// 用法：.../pose-probe.html?pose=[15 个数]
+// duck.js 里 joints / apply 是顶层绑定，本脚本在同一全局词法环境里能直接用。
+var params = new URLSearchParams(location.search);
+var raw = params.get('pose') || '';
+// 逗号分隔的 15 个数（不用方括号，免得过 adb shell 时被吃掉）
+var pose = raw ? raw.replace(/^\[|\]$/g, '').split(',').map(Number) : null;
+// 屏蔽 app 每 33 ms 推来的帧，否则会把固定姿态覆盖掉
+window.duck.setFrame = function () {};
+
+(function loop() {
+  if (pose) {
+    for (var i = 0; i < 15; i++) joints[i] = Number(pose[i]) || 0;
+    root.x = 0; root.z = 0; root.yaw = 0;
+    apply();
+  }
+  requestAnimationFrame(loop);
+})();
+
+console.log('pose probe ' + (pose ? pose.join(',') : 'none'));
+</script>
+</body>
+</html>

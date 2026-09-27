@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- 语音：本机识别，音频不上传 -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- 相机：只在 SenseLoop 和 look_now 里取帧 -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <!-- 只用一次 HTTPS 请求，媒体字节不上传 -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 前台服务持有麦克风（targetSdk 34 起要声明 microphone 类型） -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+
+    <!-- 手机没有就降级，不因此装不上 -->
+    <uses-feature android:name="android.hardware.camera.any" android:required="false" />
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
+
+    <application
+        android:allowBackup="false"
+        android:hardwareAccelerated="true"
+        android:label="@string/app_name"
+        android:theme="@style/Theme.Duck">
+
+        <!-- 日志页（Compose）：看多模态上下文、每一轮发给云端的东西和模型回话 -->
+        <activity
+            android:name=".LogActivity"
+            android:exported="false"
+            android:label="@string/app_name"
+            android:theme="@style/Theme.Duck" />
+
+        <activity
+            android:name=".MainActivity"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.Duck"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

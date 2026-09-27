@@ -1,0 +1,14 @@
+duck-meshes.js 里的 3D 网格来自 pollen-robotics/microduck 的 STL 模型文件，
+经 tools/duckmesh/build.py 简化、量化后内联。
+
+上游声明（microduck_rl/README.md）：
+    This project is licensed under the Apache 2.0 License.
+    3D model files are licensed under Creative Commons BY-SA-NC.
+
+即网格部分为 CC BY-SA-NC 4.0（署名—相同方式共享—非商业性使用）：
+  * 署名：Pollen Robotics / microduck 项目
+  * 非商业性使用：不得用于商业用途
+  * 相同方式共享：本文件的衍生物必须以同样的许可分发
+
+上游仓库：https://github.com/pollen-robotics/microduck
+本仓库其余代码（duck.js / Kotlin / 工具脚本）不受此许可约束。
