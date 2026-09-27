@@ -7,12 +7,16 @@ import java.time.format.DateTimeFormatter
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * 规格 §2 的三类，加上 `TEXT`。
+ * 规格 §2 的三类，加上 `TEXT` 和 `FACT`。
  *
  * `TEXT` 是评审 P2 那条的后半：键盘打进来的话原来按 `heard` 记、意图里写「语音：xxx」，
  * 模型会以为这句话是说出来的。识别的和打的分开记，说话的那条链一个字都没动。
+ *
+ * `FACT` 是长期记忆（`Memory.kt`）：**它和别的不是一类东西** —— 别的都是"发生过的事"，
+ * 它是"收出来的、长期成立的事"。存在自己的 `facts.jsonl` 里，不进 `episodes.jsonl`
+ * （那个文件按尾部截断读，事实混进去会被挤出窗口）。
  */
-enum class Kind { HEARD, TEXT, SEEN, DID }
+enum class Kind { HEARD, TEXT, SEEN, DID, FACT }
 
 data class Episode(
     val id: String,
@@ -45,6 +49,7 @@ fun kindOrNull(raw: String): Kind? = when (raw.trim().lowercase()) {
     "text" -> Kind.TEXT
     "seen" -> Kind.SEEN
     "did" -> Kind.DID
+    "fact" -> Kind.FACT
     else -> null
 }
 
@@ -53,6 +58,7 @@ fun maxCharsOf(kind: Kind): Int = when (kind) {
     Kind.TEXT -> HEARD_MAX_CHARS   // 一句话的长度，和听到的同一档
     Kind.SEEN -> SEEN_MAX_CHARS
     Kind.DID -> DID_MAX_CHARS
+    Kind.FACT -> FACT_MAX_CHARS
 }
 
 /** 按字符截断，不是按字节。 */

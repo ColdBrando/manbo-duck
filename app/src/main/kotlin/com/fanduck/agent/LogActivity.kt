@@ -81,6 +81,9 @@ class LogActivity : ComponentActivity() {
 /** 一次读取得到的快照。文件都不大（episodes 有 2000 条上限，§2），一次读完最简单。 */
 private class Snapshot(
     val episodes: List<Episode>,
+    /** 长期记忆（`facts.jsonl`）。和事件分着存，所以也分着读。 */
+    val facts: List<Episode>,
+    val consolidatedUpTo: String,
     val packed: List<Map<String, String>>,
     val messages: List<TranscriptMessage>,
     val summary: String,
@@ -92,12 +95,16 @@ private class Snapshot(
             val transcript = readTranscript(File(dir, "transcript.json"))
             val names = listOf(
                 "episodes.jsonl",
+                FACTS_FILE,
+                MEMORY_STATE_FILE,
                 "transcript.json",
                 "transcript-archive.jsonl",
                 "seen/latest.jpg",
             )
             return Snapshot(
                 episodes = readEpisodes(File(dir, "episodes.jsonl")),
+                facts = FactsLog(File(dir, FACTS_FILE)).read(),
+                consolidatedUpTo = readMemoryState(File(dir, MEMORY_STATE_FILE)).consolidatedUpTo,
                 packed = pack(transcript),
                 messages = transcript.messages,
                 summary = transcript.summary,
@@ -199,6 +206,20 @@ private fun EventsTab(snapshot: Snapshot, dir: File) {
                 Hint("最近留存的那一帧（$LATEST_FRAME，不上传）。按面板的「拍一张」更新它。")
                 Frame(dir, LATEST_FRAME)
             }
+        }
+        item {
+            // 长期记忆单独一个文件（facts.jsonl），所以单独列一段 —— 它不在上面那串事件里
+            val watermark = snapshot.consolidatedUpTo.ifEmpty { "还没巩固过" }
+            Hint("长期记忆 facts.jsonl，共 ${snapshot.facts.size} 条（巩固水位 $watermark）。" +
+                "「记得」这一块会进每一次意图。")
+        }
+        items(snapshot.facts.reversed()) { fact ->
+            Card(
+                title = "记得  ${shortTime(fact.at)}",
+                badgeColor = kindColor(fact.kind),
+                body = fact.text,
+                footer = fact.id,
+            )
         }
         items(rows) { episode ->
             Card(
@@ -368,6 +389,7 @@ private fun kindLabel(kind: Kind): String = when (kind) {
     Kind.TEXT -> "打字"
     Kind.SEEN -> "看到"
     Kind.DID -> "做过"
+    Kind.FACT -> "记得"
 }
 
 private fun kindColor(kind: Kind): Color = when (kind) {
@@ -375,6 +397,7 @@ private fun kindColor(kind: Kind): Color = when (kind) {
     Kind.TEXT -> Color(0xFF7FD1A8)
     Kind.SEEN -> Color(0xFFD8B473)
     Kind.DID -> Color(0xFFB8A0E8)
+    Kind.FACT -> Color(0xFFFFB4D2)
 }
 
 /** ISO-8601 → 只留时分秒。解析失败就原样返回，日志页不该因为一行时间崩掉。 */

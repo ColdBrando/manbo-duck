@@ -14,7 +14,8 @@ const val GIVE_UP_SAY = "我没想好"
 /** 规格 §7。不要改动作名。 */
 val SYSTEM_PROMPT = """
 你是超能花钱鸭的交互大脑。用户刚说的话在「语音」里，用键盘打进来的是「打字」。
-「听到」「打字」「看到」「做过」是鸭子端上的记忆，不是你亲眼看到的画面。
+「记得」「听到」「打字」「看到」「做过」是鸭子端上的记忆，不是你亲眼看到的画面。
+「记得」是长期记住的事，「听到」是最近说过的话。
 没有记录的事情就说记录里没有，不要编造。
 
 你可以：
@@ -24,11 +25,21 @@ Action Input: {"query":"检索句"}
 Action: look_now
 Action Input: {}
 
+Action: remember
+Action Input: {"text":"值得长期记住的一句话"}
+
+什么时候用 remember：用户说了自己的名字、称呼、偏好、习惯，或者让你记住什么事的时候。
+一次一句，写"用户喜欢喝美式"这样陈述句，不要写"用户说…"。
+别的信息够用就不要用。
+**remember 和 search_memory 一样是 Action，不是 actions 里的动作** —— 想记住就下一轮
+先输出上面这三行，拿到 Observation 之后再给 Final Answer。
+
 信息够了就结束，不要再输出 Action：
 Thought: ...
 Final Answer: {"say":"对用户说的话","actions":[{"name":"stop"}]}
 
-actions 里的 name 只能是 stop、velocity、gaze、stand、sit。
+actions 里**只能**放 stop、velocity、gaze、stand、sit 这五个动作 —— 放别的会被丢掉，
+remember 放进来也一样（它是 Action，不是动作）。
 让鸭子动之前，先看「看到」里的距离。最近距离小于 0.3 米时不要给前进速度。
 用中文思考。say 用短句。
 """.trim()
@@ -44,6 +55,9 @@ class AgentState(
     val log: EpisodeSink = MemoryEpisodeSink(),
     var transcript: Transcript = Transcript(),
     val episodes: MutableList<Episode> = mutableListOf(),
+    /** 长期记忆（`facts.jsonl`）。和 `episodes` 分开：那个按尾部截断读，这个全留着。 */
+    val facts: MutableList<Episode> = mutableListOf(),
+    var memoryState: MemoryState = MemoryState(),
     var busy: Boolean = false,
     /** 等着的还没轮到的句子。连来源一起存：排队时说话和打字可以混在一起。 */
     val queue: MutableList<Pair<String, Kind>> = mutableListOf(),
@@ -51,6 +65,12 @@ class AgentState(
     val sleep: (Int) -> Unit = { ms -> Thread.sleep(ms.toLong()) },
     val archive: (List<TranscriptMessage>) -> Unit = {},
     val onTranscript: (Transcript) -> Unit = {},
+    /** `remember` 工具：合并去重 + 落盘，返回**合并之后的全部事实**。没接就是记不了。 */
+    val remember: (String) -> List<Episode> = { emptyList() },
+    /** 事实变了要落盘。 */
+    val onFacts: (List<Episode>) -> Unit = {},
+    /** 巩固进度变了要落盘。 */
+    val onMemoryState: (MemoryState) -> Unit = {},
 )
 
 fun appendEpisode(state: AgentState, kind: Kind, text: String, media: String = ""): Episode {
@@ -95,7 +115,7 @@ fun onUtterance(raw: String, kind: Kind, state: AgentState) {
 
 fun runReact(utterance: String, state: AgentState, source: Kind = Kind.HEARD) {
     // 当前这句已经写成一条事件（heard 或 text），所以对应那块里可以出现刚才的原话。
-    val intent = buildIntent(utterance, state.episodes, state.now(), source)
+    val intent = buildIntent(utterance, state.episodes, state.now(), source, state.facts)
     state.transcript = state.transcript.copy(
         messages = state.transcript.messages + TranscriptMessage("user", intent),
     )
@@ -105,7 +125,35 @@ fun runReact(utterance: String, state: AgentState, source: Kind = Kind.HEARD) {
         // 成功、云端失败、「我没想好」都要把已产生的 assistant / tool 写盘，
         // 但不额外编造 Final Answer。
         state.onTranscript(state.transcript)
+        // 这一轮结束了，顺便收拾一下记忆（攒够一批经历才会真的问云端一次）。
+        consolidateIfNeeded(state)
     }
+}
+
+/**
+ * 把经历收成事实（长期记忆）。攒够 `CONSOLIDATE_EVERY` 条新经历才问一次云端，所以绝大多数
+ * 轮次这里是空转。
+ *
+ * **失败就当没发生**：这是收拾记忆，不是用户要的回答 —— 异常绝不能穿出去（评审 P0-2 那课），
+ * 水位线也不动，下次再试。
+ */
+private fun consolidateIfNeeded(state: AgentState) {
+    val batch = eventsToConsolidate(state.episodes, state.memoryState.consolidatedUpTo)
+    if (batch.isEmpty()) return
+    val raw = try {
+        state.cloud.complete(
+            listOf(mapOf("role" to "user", "content" to consolidationPrompt(batch))),
+        )
+    } catch (e: Exception) {
+        return
+    }
+    val merged = upsertFacts(state.facts, parseFacts(raw, state.facts), state.now())
+    state.facts.clear()
+    state.facts.addAll(merged)
+    state.onFacts(merged)
+    // 水位线即使一条都没收到也要往前移：问过了，不值得记就是没值得记的。
+    state.memoryState = MemoryState(consolidatedUpTo = batch.last().at)
+    state.onMemoryState(state.memoryState)
 }
 
 private fun reactLoop(state: AgentState) {
@@ -166,8 +214,9 @@ private fun executeTool(name: String, inputJson: String, state: AgentState): Str
         if (query.isBlank()) {
             "Observation: query 为空"
         } else {
+            // 长期记忆也一起搜：模型问"我叫什么"的时候，答案在 facts 里而不是事件流里
             val rows = selectEpisodes(
-                state.episodes,
+                state.episodes + state.facts,
                 Kind.entries.toSet(),
                 query,
                 state.now(),
@@ -175,6 +224,31 @@ private fun executeTool(name: String, inputJson: String, state: AgentState): Str
             )
             if (rows.isEmpty()) "Observation: 没有记录"
             else "Observation: " + rows.joinToString("\n") { lineOf(it) }
+        }
+    }
+
+    /**
+     * 主动记一条长期记忆。合并去重和落盘在 `state.remember` 里（那是 :app 接的
+     * `FactsLog`），这里只管把结果同步回内存。
+     */
+    "remember" -> {
+        val text = try {
+            JSONObject(inputJson).optString("text")
+        } catch (e: Exception) {
+            ""
+        }
+        if (text.isBlank()) {
+            "Observation: text 为空"
+        } else {
+            val merged = state.remember(text)
+            if (merged.isEmpty()) {
+                "Observation: 记不了（这台设备的长期记忆没接上）"
+            } else {
+                state.facts.clear()
+                state.facts.addAll(merged)
+                state.onFacts(merged)
+                "Observation: 记下了"
+            }
         }
     }
     "look_now" -> {

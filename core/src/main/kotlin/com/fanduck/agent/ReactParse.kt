@@ -17,6 +17,14 @@ data class RobotAction(
 
 data class FinalCommand(val say: String, val actions: List<RobotAction>)
 
+/**
+ * 工具白名单（规格 §4.2 的两个 + 长期记忆的 `remember`）。
+ *
+ * **加工具要同时改这里和 `AgentLoop.executeTool`** —— 这里没加的话模型调了会被当成格式错误，
+ * 表现是"它说记住了其实没记"（`remember` 就是这么漏过一次的）。
+ */
+val TOOL_NAMES = setOf("search_memory", "look_now", "remember")
+
 sealed class ReactStep {
     data class Tool(val name: String, val inputJson: String) : ReactStep()
     data class Final(val command: FinalCommand) : ReactStep()
@@ -66,7 +74,7 @@ fun parseReact(raw: String): ReactStep {
         ?: return ReactStep.Invalid
     val inputAt = raw.indexOf("Action Input:")
     val inputJson = if (inputAt < 0) "{}" else extractJsonObject(raw.substring(inputAt)) ?: "{}"
-    if (actionName != "search_memory" && actionName != "look_now") return ReactStep.Invalid
+    if (actionName !in TOOL_NAMES) return ReactStep.Invalid
     return ReactStep.Tool(actionName, inputJson)
 }
 

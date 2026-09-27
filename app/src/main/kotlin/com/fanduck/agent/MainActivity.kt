@@ -96,6 +96,8 @@ class MainActivity : Activity() {
 
         val dir = File(filesDir, "agent")
         val log = EpisodeLog(File(dir, "episodes.jsonl"))
+        val factsLog = FactsLog(File(dir, FACTS_FILE))
+        val memoryStateFile = File(dir, MEMORY_STATE_FILE)
         sense = CameraSense(this)
         state = AgentState(
             cloud = cloudClient(),
@@ -104,8 +106,17 @@ class MainActivity : Activity() {
             log = log,
             transcript = readTranscript(File(dir, "transcript.json")),
             episodes = log.read().toMutableList(),
+            facts = factsLog.read().toMutableList(),
+            memoryState = readMemoryState(memoryStateFile),
             onTranscript = { writeTranscript(File(dir, "transcript.json"), it) },
             archive = { appendArchive(File(dir, "transcript-archive.jsonl"), it) },
+            remember = { text -> factsLog.remember(text) },
+            onFacts = { factsLog.rewrite(it) },
+            onMemoryState = { writeMemoryState(memoryStateFile, it) },
+        )
+        Log.i(
+            MEMORY_TAG,
+            "长期记忆 ${state.facts.size} 条，巩固水位 ${state.memoryState.consolidatedUpTo.ifEmpty { "（还没巩固过）" }}",
         )
 
         web = WebView(this).apply {
@@ -352,6 +363,7 @@ class MainActivity : Activity() {
         const val HOLD_DELAY_MS = 250L
         const val SENSE_TAG = "duck-sense"
         const val CLOUD_TAG = "duck-cloud"
+        const val MEMORY_TAG = "duck-memory"
     }
 }
 

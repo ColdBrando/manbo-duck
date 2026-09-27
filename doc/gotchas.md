@@ -26,6 +26,33 @@
    而意图里嵌着「听到 / 看到 / 做过」—— 说「你好」，因为上次会话的记忆里有「过来」，鸭子自己走了
    起来。现在只看「问题：」那一行。
 
+## 播报（TTS）
+
+24. **"音质差"通常不是引擎不行，是嗓子选错了**。同一个引擎对中文一般有好几个 voice，
+    质量从 `QUALITY_VERY_LOW` 到 `VERY_HIGH`，而 `setLanguage` 默认给的那个常常是低质量的
+    "compact" 那个。挑 `quality` 最高的，同质量优先 `!isNetworkConnectionRequired`
+    （联网 voice 在国内经常拉不下来，而且它一失败就是整句没声音）。实测模拟器上挑到的是
+    `cmn-cn-x-ccc-local（高）`。
+25. **`setLanguage` 会把 voice 复位** —— 要先 `setVoice` 再设语言，或者只设 voice（voice 里
+    自带 locale）。顺序反了就是"选了半天还是那个嗓子"。
+26. **`TextToSpeech.getEngines()` 是实例方法**（`android.jar` 里就是这么声明的），不是静态的。
+    拿它枚举装在机器上的引擎，用来在"系统默认引擎不会说中文"时换一个试。
+27. **默认的 audio attributes 是"无障碍"用途**，不少机器上音量偏小、还和自己的跳舞音乐打架。
+    声明成 `USAGE_ASSISTANT` + `CONTENT_TYPE_SPEECH`，说话期间再申请一个
+    `AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK` 的焦点 —— 音乐让一让，鸭子压得住。
+
+## 长期记忆 / 提示词
+
+21. **模型会把工具塞进 `actions` 里**。给 `remember` 加完工具之后，DeepSeek 输出的是
+    `Final Answer: {"actions":[{"name":"remember","params":{...}}]}` —— 它把 remember 当成了
+    机器人动作（于是被动作白名单丢掉，`did` 记一条"未知动作"）。提示词里必须明说
+    **"remember 和 search_memory 一样是 Action，不是 actions 里的动作"**，改完它就照做了
+    （轨迹里能看见它自己复述这句话）。加任何新工具都要防这一手。
+22. **`parseReact` 里有一份工具白名单**（`TOOL_NAMES`）：只加 `executeTool` 的分支、
+    忘了加白名单的话，模型调了会被判成格式错误 —— 表现是"它说记住了其实没记"，而且不报错。
+23. **巩固和"没用的话"要看得出区别**：对「你好 / 过来 / 坐下」这类一次性的话，模型会正确地
+    回 `[]`（不值得记），这时**水位线仍然要往前移**，否则每轮都会重复问同一批经历。
+
 ## 语音识别
 
 18. **`SpeechRecognizer` 自己不识别**，它只是绑到设备上另一个 app 的 `RecognitionService`，

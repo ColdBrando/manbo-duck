@@ -17,13 +17,20 @@ fun buildIntent(
     nowIso: String,
     /** 这句是听到的还是打进来的。默认听到 —— 语音是主链路。 */
     source: Kind = Kind.HEARD,
+    /** 长期记忆（`facts.jsonl`）。没有就整块不出现。 */
+    facts: List<Episode> = emptyList(),
 ): String {
-    fun block(title: String, kind: Kind): String {
-        val rows = selectEpisodes(episodes, setOf(kind), utterance, nowIso, k = 3)
+    fun block(title: String, kind: Kind, pool: List<Episode> = episodes): String {
+        val rows = selectEpisodes(pool, setOf(kind), utterance, nowIso, k = 3)
         val body = if (rows.isEmpty()) "（没有记录）" else rows.joinToString("\n") { lineOf(it) }
         return "$title：\n$body"
     }
-    val lines = mutableListOf("${source.sourceLabel()}：$utterance", block("听到", Kind.HEARD))
+    val lines = mutableListOf("${source.sourceLabel()}：$utterance")
+    // 「记得」放最前面：这是长期成立的事，比最近发生了什么更重要
+    if (facts.isNotEmpty()) {
+        lines += block("记得", Kind.FACT, facts)
+    }
+    lines += block("听到", Kind.HEARD)
     // 「打字」这一块只在真的用过键盘输入时才出现：语音那条链路的意图保持 §3.3 原样四个块。
     if (source == Kind.TEXT || episodes.any { it.kind == Kind.TEXT }) {
         lines += block("打字", Kind.TEXT)

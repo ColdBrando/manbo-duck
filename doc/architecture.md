@@ -19,21 +19,28 @@ APK；JVM 单测用的是真实现（Android 的本地单测里 `org.json` 是�
 ## 一块屏幕到一朵云的数据流
 
 ```
-按住说话 ──► SpeechRecognizer ──►（静音窗口：鸭子说话时丢掉）──► onHeard
-打字输入 ──► onTyped ────────────────────────────────────────────┘
-                                                                    │
-相机每 2 秒一拍 ──►「看到」一行 ─┐                                   │
-做过的事 ──►「did」一行 ────────┴──► episodes.jsonl（全在本机）      │
-                                                                    ▼
-                                    拼意图：语音/打字 + 听到 + 看到 + 做过 + 问题
-                                                                    │
-                                          DeepSeek（SSE 流式，8 秒无 token 报错）
-                                                                    │
-                              ReAct：Thought / Action / Final Answer（最多 8 步）
-                                                                    │
-                     动作白名单 + 裁剪 + 近距离拒绝 ──► RobotPort ──► 屏幕上的鸭子
-                                                                    │           │
-                                                        每条动作落一条 did ◄── Ack
+按住说话 ──► SttSource（端上优先，坏了自己换源，见 Stt.kt）
+            ──（静音窗口：鸭子说话时丢掉）──► onHeard
+打字输入 ─────────────────────────────► onTyped
+                                            │
+相机每 2 秒一拍 ──► 本机认图 ──►「看到」     │
+做过的事 ─────────────────────►「did」      │
+                                            ▼
+                    episodes.jsonl（全在本机，读盘只取尾部 2000 条）
+                                            │
+                                            ▼
+            拼意图：语音/打字 + 记得 + 听到 + 看到 + 做过 + 问题
+                                            │
+                                 DeepSeek（SSE 流式，8 秒无 token 报错）
+                                            │
+                         ReAct：Thought / Action / Final Answer（最多 8 步）
+                              │                                │
+                     remember 工具                   动作白名单 + 裁剪 + 近距离拒绝
+                              ▼                                ▼
+                   facts.jsonl（长期记忆）              RobotPort ──► 屏幕上的鸭子
+                              ▲                                │
+                  攒够 40 条经历自动巩固 ──┐         每条动作落一条 did ◄── Ack
+                              └───────────┘
 ```
 
 ## core 的文件
@@ -41,6 +48,7 @@ APK；JVM 单测用的是真实现（Android 的本地单测里 `org.json` 是�
 | 文件 | 干什么 |
 |---|---|
 | `Episode.kt` | 事件读写、id、按类截断（读盘只取尾部 N 条，免得跑一天越来越慢） |
+| `Memory.kt` | 长期记忆：经历 → 事实的巩固、去重（重复提到就刷新时间）、淘汰、`facts.jsonl` 落盘 |
 | `MemorySearch.kt` | 分词、打分、按类挑选：中文按字 + 英文数字按词 |
 | `IntentText.kt` | 拼第一次发给云端的那段用户消息 |
 | `ReactParse.kt` | 解析 `Thought` / `Action` / `Final Answer` |
