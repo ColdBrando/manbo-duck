@@ -26,6 +26,20 @@
    而意图里嵌着「听到 / 看到 / 做过」—— 说「你好」，因为上次会话的记忆里有「过来」，鸭子自己走了
    起来。现在只看「问题：」那一行。
 
+## 检测器（ML Kit）
+
+13. **别用走 Play 服务的那个版本**（`com.google.android.gms:play-services-mlkit-image-labeling`）。
+    它 APK 只涨两三兆、看着很香，但模型要现下：实测连**带 Play 服务的模拟器**都下不动 ——
+    logcat 里是 `DynamiteModule: Local module descriptor class for
+    com.google.android.gms.vision.ica not found`，然后每一拍都抛
+    `MlKitException: Waiting for the label optional module to be downloaded`。国内真机的
+    Play 服务更不可能下到。所以用 bundled 版（`com.google.mlkit:image-labeling`，模型 2.9 MB
+    打进 APK），代价是必须配 `ndk.abiFilters` —— 它的 `libmlkitcommonpipeline.so` 按 4 个 ABI
+    各打一份，合起来 40 MB，不配的话 debug APK 直接 67 MB。
+14. **置信度不能写进「看到」那句话里**：同一幅画面每拍给出的分数都在抖（实测
+    77% / 73% / 71% / 73%），文字一变就写一条新事件，`shouldWriteSeen` 的去重直接失效 ——
+    10 秒里灌了 5 条同一个东西。分数字段留着做阈值和排序，别往外写。
+
 ## 环境
 
 8. **API 28 的 AOSP 镜像 WebGL 上不了屏**：最小 WebGL 探针页（`assets/duck/webgl-probe.html`，

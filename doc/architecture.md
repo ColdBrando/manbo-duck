@@ -10,7 +10,8 @@ tools/duckmesh/  屏幕鸭子的网格生成管线（离线跑，不进 APK）
 
 为什么把逻辑做成 JVM 模块而不是 Android library：单测只该覆盖事件、记忆检索、ReAct 主循环、
 轨迹压缩和姿态计算这几块，做成 JVM 模块后 `./gradlew :core:test` 不需要 SDK、模拟器或设备，
-44 条断言秒级跑完。`app` 模块除了日志页那套 Compose，没有任何第三方依赖。
+56 条断言秒级跑完。`app` 模块只有两个第三方依赖：日志页那套 Compose，和检测器的
+ML Kit（`image-labeling`，模型随 APK，不联网，见 `doc/features.md`）。
 
 `org.json` 在 `core` 里是 `compileOnly` + `testImplementation`：Android 运行时自带它，不重复打进
 APK；JVM 单测用的是真实现（Android 的本地单测里 `org.json` 是空壳，很多行为不一样）。
@@ -48,6 +49,7 @@ APK；JVM 单测用的是真实现（Android 的本地单测里 `org.json` 是�
 | `AgentLoop.kt` | 语音队列和 ReAct 主循环、工具（`search_memory` / `look_now`） |
 | `DuckMotion.kt` | 意图 → 15 个关节角 + 地面位置，30 fps 采样 |
 | `SenseLoop.kt` | 「看见一句怎么写」的纯部分 + 每 2 秒一拍 |
+| `Detector.kt` | 检测结果怎么变成一句话：阈值、取几个、中英标签表（认图本身在 :app） |
 | `MuteWindow.kt` | 静音窗口：说话期间和说完 800 ms 内丢掉识别结果 |
 | `CloudStream.kt` | 云端线格式：请求体怎么拼、SSE 里正文取哪个字段 |
 | `Dance.kt` | 《哈基米》舞步：八拍一循环的关键帧 + 插值 |
@@ -61,7 +63,7 @@ APK；JVM 单测用的是真实现（Android 的本地单测里 `org.json` 是�
 | `ScreenRobot.kt` | `RobotPort` 的手机实现：`DuckMotion` + `TextToSpeech`，说话时同时张嘴 |
 | `DuckView.kt` | 界面时钟（约 30 fps）+ `window.duck.setFrame` + 机位切换 |
 | `VoiceInput.kt` | 本机语音识别，一句一挂 → 过静音窗口 → `onHeard` |
-| `CameraSense.kt` | `SensePort` 的手机实现：Camera2 取帧 + 接近传感器 |
+| `CameraSense.kt` | `SensePort` 的手机实现：Camera2 取帧 + ML Kit 认图 + 接近传感器 |
 | `HttpCloudClient.kt` | `CloudClient` 的手机实现：SSE 流式 + 8 秒超时 + 连接失败重试 |
 | `DancePlayer.kt` | 放《哈基米》并驱动舞步（MediaPlayer + 按拍子取帧） |
 | `DuckPanel.kt` | 调试面板：一列按钮直接驱动 `RobotPort`（只在 debug 构建） |

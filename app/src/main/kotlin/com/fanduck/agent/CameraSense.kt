@@ -3,6 +3,7 @@ package com.fanduck.agent
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
+import android.graphics.BitmapFactory
 import android.graphics.ImageFormat
 import android.hardware.Sensor
 import android.hardware.SensorEvent
@@ -16,22 +17,33 @@ import android.hardware.camera2.CaptureRequest
 import android.media.ImageReader
 import android.os.Handler
 import android.os.HandlerThread
+import android.os.SystemClock
 import android.util.Log
+import com.google.android.gms.tasks.Tasks
+import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.label.ImageLabeler
+import com.google.mlkit.vision.label.ImageLabeling
+import com.google.mlkit.vision.label.defaults.ImageLabelerOptions
 import java.io.File
+import java.util.concurrent.TimeUnit
 
 /**
  * 规格 §4.1 / §5：相机用 Camera2，只在 `SenseLoop` 和 `look_now` 里取帧。
  *
- * 没有检测器，所以那句话就是 `NO_DETECTOR_CAPTION`（§4.1 第 1 条）—— 相机现在是"取到了帧"
- * 的证明，以及以后接检测器的位置。像素不出这台手机（§8）：帧只留在内存里，
- * 落盘的只有 `seen/latest.jpg`（§4.1 第 4 条，可选），而 `media` 字段不进云端请求
- * ——`IntentText.lineOf` 只取 id/at/text。
+ * **看得见**：帧交给 ML Kit 的 image labeling（`Detector.kt` 里那些阈值、取几个、怎么说
+ * 是纯逻辑，这里只负责把 JPEG 喂给模型）。bundled 版模型，全程在本机、不联网；
+ * 认不出东西就是 `NO_DETECTOR_CAPTION`（§4.1 第 1 条）。
+ *
+ * 像素不出这台手机（§8）：帧只留在内存里，落盘的只有 `seen/latest.jpg`（§4.1 第 4 条，可选），
+ * 而 `media` 字段不进云端请求——`IntentText.lineOf` 只取 id/at/text。发给云端的是**标签**
+ * （"看到 人 87%"），不是图。
  *
  * 距离用手机上的接近传感器（听筒旁边那个：近=0，远=量程，通常 5 cm），除以 100 换成米。
  * 所以**盖住屏幕上半边**时「最近距离 0 米」会真的触发 §3.5 的近距离拒绝。没有就不拼。
  *
- * 相机回调在 `HandlerThread` 上，只往这两个 volatile 里写值；读它们的是 agent 线程
- * （§4：摄像头回调把结果丢进 agent 线程，不要在回调里访问云端）。
+ * 相机回调在 `HandlerThread` 上，只往 volatile 里写值；**认图在 agent 线程上**
+ * （`captionAndDistance` 由它调用，§4：摄像头回调把结果丢进 agent 线程）。模型跑一次几十毫秒，
+ * 每 2 秒一拍，所以不另开线程；同一秒内重复问就复用上一次的结果（`look_now` 可能紧跟一拍）。
  */
 class CameraSense(private val context: Context) : SensePort {
 
@@ -74,6 +86,9 @@ class CameraSense(private val context: Context) : SensePort {
             return
         }
         running = true
+        // 建客户端会顺手开始把模型下下来（模型走 Play 服务），所以开机就建：不然第一次认图
+        // 卡在下载上，只认出一句"未识别物体"。
+        runCatching { labelerHolder.value }
         proximity?.let { sensors.registerListener(proximityListener, it, SensorManager.SENSOR_DELAY_NORMAL) }
         handler.post { open() }
     }
@@ -87,8 +102,60 @@ class CameraSense(private val context: Context) : SensePort {
         }
     }
 
+    /** ML Kit 的识别器。第一次要认图时才建（懒），`shutdown()` 里关。 */
+    private val labelerHolder = lazy {
+        ImageLabeling.getClient(
+            ImageLabelerOptions.Builder()
+                .setConfidenceThreshold(LABEL_MIN_CONFIDENCE)
+                .build(),
+        )
+    }
+    private val labeler: ImageLabeler by labelerHolder
+
+    /** 上一次认图的结果：同一秒里被问第二次就复用，别把模型跑两遍。 */
+    private var cachedCaption: String? = null
+    private var cachedAt = 0L
+
     override fun captionAndDistance(): Pair<String, Float?> =
-        (if (running) NO_DETECTOR_CAPTION else NO_CAMERA_CAPTION) to nearestMeters
+        (if (running) caption() else NO_CAMERA_CAPTION) to nearestMeters
+
+    private fun caption(): String {
+        val jpeg = frame ?: return NO_DETECTOR_CAPTION   // 相机开着但还没取到帧
+        val now = SystemClock.uptimeMillis()
+        val cached = cachedCaption
+        if (cached != null && now - cachedAt < LABEL_CACHE_MS) return cached
+        val caption = captionOf(jpeg)
+        cachedCaption = caption
+        cachedAt = now
+        return caption
+    }
+
+    /** 认一帧。任何失败（超时、模型没起来、图坏了）都当"没认出东西"，不让一拍打断 agent 线程。 */
+    private fun captionOf(jpeg: ByteArray): String {
+        val bitmap = try {
+            BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size)
+        } catch (e: Exception) {
+            null
+        } ?: return NO_DETECTOR_CAPTION
+        return try {
+            val found = Tasks.await(
+                labeler.process(InputImage.fromBitmap(bitmap, 0)),
+                LABEL_TIMEOUT_S,
+                TimeUnit.SECONDS,
+            )
+            captionFromLabels(found.map { Label(labelName(it.text), it.confidence) })
+        } catch (e: Exception) {
+            Log.i(TAG, "认图失败：${e.message}")
+            NO_DETECTOR_CAPTION
+        } finally {
+            bitmap.recycle()
+        }
+    }
+
+    /** 退出时调用：把识别器关掉（没建过就不建）。 */
+    fun shutdown() {
+        if (labelerHolder.isInitialized()) runCatching { labeler.close() }
+    }
 
     /**
      * 调试和手测用：把内存里最新那一帧覆盖写到 `seen/latest.jpg`（§4.1 第 4 条）。
@@ -193,6 +260,12 @@ class CameraSense(private val context: Context) : SensePort {
         const val TAG = "duck-sense"
         const val FRAME_WIDTH = 640
         const val FRAME_HEIGHT = 480
+
+        /** 认图结果的复用窗口：一拍 2 秒，`look_now` 可能紧跟其后。 */
+        const val LABEL_CACHE_MS = 1_000L
+
+        /** 认图超时。超过就当没认出来 —— agent 线程上还有一拍在等着。 */
+        const val LABEL_TIMEOUT_S = 3L
 
         /** 相机没开时不要撒谎说"摄像头正常"（§4.1 那句话是给"没有检测器"写的）。 */
         const val NO_CAMERA_CAPTION = "摄像头没开"

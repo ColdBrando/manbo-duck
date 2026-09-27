@@ -297,6 +297,7 @@ class MainActivity : Activity() {
     override fun onDestroy() {
         ui.removeCallbacks(senseTick)
         sense.stop()
+        sense.shutdown()
         voice.stop()
         duckView.stop()
         agent.shutdown()
