@@ -26,6 +26,21 @@
    而意图里嵌着「听到 / 看到 / 做过」—— 说「你好」，因为上次会话的记忆里有「过来」，鸭子自己走了
    起来。现在只看「问题：」那一行。
 
+## 语音识别
+
+18. **`SpeechRecognizer` 自己不识别**，它只是绑到设备上另一个 app 的 `RecognitionService`，
+    AOSP 不带识别器。所以"本机识别"这句话里的"本机"是**设备决定的**：GMS 机器上默认那个是
+    Google 的（识别在它服务器上做，音频要流上去；连不上就是错误码 2），国行 ROM 上一般是厂商的。
+    查这台设备上是谁在提供：
+    `adb shell cmd package query-services --brief -a android.speech.RecognitionService`，
+    以及 `adb shell settings get secure voice_recognition_service`。
+19. **换源必须拉黑**：两个源都"声称可用"但都失败时，不拉黑就会来回换（实测模拟器上
+    on-device 报 12「不支持中文」→ 换 system → 如果 system 也报 12 → 换回 on-device → …）。
+    `nextStt(…, dead = …)` 的 `dead` 是必须的，不是可选优化。
+20. **端上识别在模拟器上没有中文包**（报 12），会退到系统识别（报 2，网络不通）。真机上
+    要看厂商 ROM 有没有端上中文模型 —— 所以"音频不出手机"这句话，得看 logcat 里
+    `识别源：…` 那条实测。
+
 ## 检测器（ML Kit）
 
 13. **别用走 Play 服务的那个版本**（`com.google.android.gms:play-services-mlkit-image-labeling`）。

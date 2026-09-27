@@ -50,6 +50,7 @@ APK；JVM 单测用的是真实现（Android 的本地单测里 `org.json` 是�
 | `DuckMotion.kt` | 意图 → 15 个关节角 + 地面位置，30 fps 采样 |
 | `SenseLoop.kt` | 「看见一句怎么写」的纯部分 + 每 2 秒一拍 |
 | `Detector.kt` | 检测结果怎么变成一句话：阈值、取几个、中英标签表（认图本身在 :app） |
+| `Stt.kt` | 识别端口 `SttSource` + 挑源/换源规则 + 连续听的退避 + 错误码翻人话（识别本身在 :app） |
 | `MuteWindow.kt` | 静音窗口：说话期间和说完 800 ms 内丢掉识别结果 |
 | `CloudStream.kt` | 云端线格式：请求体怎么拼、SSE 里正文取哪个字段 |
 | `Dance.kt` | 《哈基米》舞步：八拍一循环的关键帧 + 插值 |
@@ -62,7 +63,8 @@ APK；JVM 单测用的是真实现（Android 的本地单测里 `org.json` 是�
 | `MainActivity.kt` | 全屏 WebView + agent 线程 + 云端选择 + 静音窗口 + 生命周期 |
 | `ScreenRobot.kt` | `RobotPort` 的手机实现：`DuckMotion` + `TextToSpeech`，说话时同时张嘴 |
 | `DuckView.kt` | 界面时钟（约 30 fps）+ `window.duck.setFrame` + 机位切换 |
-| `VoiceInput.kt` | 本机语音识别：前台按住说话、后台连续听（带退避），一律过静音窗口 → `onHeard` |
+| `VoiceInput.kt` | 语音的**驱动**：挑源/换源、前台按住说话、后台连续听（带退避）、静音窗口 → `onHeard` |
+| `AndroidSttSource.kt` | `SttSource` 的系统实现（端上 / 系统默认两种绑法）+ 接厂商 SDK 的模板 |
 | `DuckService.kt` | 前台服务（`microphone`）：鸭子退到后台时把麦克风握在手里，通知点一下回应用 |
 | `CameraSense.kt` | `SensePort` 的手机实现：Camera2 取帧 + ML Kit 认图 + 接近传感器 |
 | `HttpCloudClient.kt` | `CloudClient` 的手机实现：SSE 流式 + 8 秒超时 + 连接失败重试 |
