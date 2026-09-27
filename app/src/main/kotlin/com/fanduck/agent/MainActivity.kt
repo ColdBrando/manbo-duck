@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -50,6 +51,9 @@ class MainActivity : Activity() {
 
     /** 当前的机位（0..7），页面重载后要按回去。 */
     private var viewIndex = 0
+
+    /** 是不是自己打开了另一个页面（日志页）。见 `onPause`：那种 pause 不算"退到后台"。 */
+    private var ownActivityOnTop = false
 
     /** 按住说话：按下后过了防误触的延迟才真的开麦。 */
     private var holding = false
@@ -204,6 +208,12 @@ class MainActivity : Activity() {
         voice = VoiceInput(this, mute) { line -> agent.execute { onHeard(line, state) } }
         val wanted = listOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.CAMERA)
             .filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
+            .toMutableList()
+        // 前台服务那条通知（Android 13+）。不给也照样跑，只是通知栏里看不见鸭子醒着。
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val notify = Manifest.permission.POST_NOTIFICATIONS
+            if (checkSelfPermission(notify) != PackageManager.PERMISSION_GRANTED) wanted += notify
+        }
         if (wanted.isNotEmpty()) requestPermissions(wanted.toTypedArray(), REQUEST_PERMISSIONS)
     }
 
@@ -255,6 +265,8 @@ class MainActivity : Activity() {
 
     /** debug 面板的「日志」：打开日志页（Compose 写的，看多模态上下文和每一轮回话）。 */
     private fun openLog() {
+        // 先记下来再跳：日志页盖上来会让本页 pause，那不是"退到后台"（见 onPause）
+        ownActivityOnTop = true
         startActivity(Intent(this, LogActivity::class.java))
     }
 
@@ -272,11 +284,13 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        ownActivityOnTop = false
         if (pageReady) duckView.start()
-        // 麦克风和相机只在鸭子看得见的时候开：屏幕上有人在看，才谈得上"跟鸭子说话"。
-        // 规格 §5 说的前台服务（后台也听）还没做，见 README 的已知事项。
+        // 回到前台：鸭子看得见了，交回给"按住说话"，前台服务收掉。
+        DuckService.stop(this)
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
             voice.start()
+            voice.setContinuous(false)
         }
         if (checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
             sense.start()
@@ -289,8 +303,20 @@ class MainActivity : Activity() {
         dance.stop()
         ui.removeCallbacks(senseTick)
         sense.stop()
-        voice.stop()
         duckView.stop()
+        // 退到后台：没人能按住屏幕了，所以切成连续听，并起前台服务让它合法（规格 §5）。
+        // 服务必须**在这里**起 —— Android 12 起不允许从后台启动前台服务，onPause 这一刻还算前台。
+        //
+        // 但"pause"不等于"用户离开了"：打开日志页（自己的 Activity）也会 pause。那种情况
+        // 按老样子把麦关掉，别在人家看日志的时候开着麦克风。
+        val canHear = checkSelfPermission(Manifest.permission.RECORD_AUDIO) ==
+            PackageManager.PERMISSION_GRANTED
+        if (canHear && !ownActivityOnTop) {
+            DuckService.start(this)
+            voice.setContinuous(true)
+        } else {
+            voice.stop()
+        }
         super.onPause()
     }
 
@@ -299,6 +325,7 @@ class MainActivity : Activity() {
         sense.stop()
         sense.shutdown()
         voice.stop()
+        DuckService.stop(this)   // 鸭子都没了，别让前台服务留着占麦克风
         duckView.stop()
         agent.shutdown()
         robot.shutdown()

@@ -62,7 +62,8 @@ APK；JVM 单测用的是真实现（Android 的本地单测里 `org.json` 是�
 | `MainActivity.kt` | 全屏 WebView + agent 线程 + 云端选择 + 静音窗口 + 生命周期 |
 | `ScreenRobot.kt` | `RobotPort` 的手机实现：`DuckMotion` + `TextToSpeech`，说话时同时张嘴 |
 | `DuckView.kt` | 界面时钟（约 30 fps）+ `window.duck.setFrame` + 机位切换 |
-| `VoiceInput.kt` | 本机语音识别，一句一挂 → 过静音窗口 → `onHeard` |
+| `VoiceInput.kt` | 本机语音识别：前台按住说话、后台连续听（带退避），一律过静音窗口 → `onHeard` |
+| `DuckService.kt` | 前台服务（`microphone`）：鸭子退到后台时把麦克风握在手里，通知点一下回应用 |
 | `CameraSense.kt` | `SensePort` 的手机实现：Camera2 取帧 + ML Kit 认图 + 接近传感器 |
 | `HttpCloudClient.kt` | `CloudClient` 的手机实现：SSE 流式 + 8 秒超时 + 连接失败重试 |
 | `DancePlayer.kt` | 放《哈基米》并驱动舞步（MediaPlayer + 按拍子取帧） |

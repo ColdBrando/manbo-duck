@@ -10,6 +10,9 @@
     <!-- 前台服务持有麦克风（targetSdk 34 起要声明 microphone 类型） -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <!-- 前台服务那条通知（Android 13+）。漏了它 `pm grant` 会直接报
+         "has not requested permission"，运行时请求也弹不出来。 -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!-- 手机没有就降级，不因此装不上 -->
     <uses-feature android:name="android.hardware.camera.any" android:required="false" />
@@ -20,6 +23,13 @@
         android:hardwareAccelerated="true"
         android:label="@string/app_name"
         android:theme="@style/Theme.Duck">
+
+        <!-- 鸭子退到后台也活着、也听得见（规格 §5）。type 必须是 microphone：
+             不然在后台用麦克风会被系统掐掉。 -->
+        <service
+            android:name=".DuckService"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
 
         <!-- 日志页（Compose）：看多模态上下文、每一轮发给云端的东西和模型回话 -->
         <activity
