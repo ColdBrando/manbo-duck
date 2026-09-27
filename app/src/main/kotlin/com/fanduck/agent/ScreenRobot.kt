@@ -55,15 +55,31 @@ class ScreenRobot(
 
     override fun padActive(): Boolean = false   // 手机没有手柄
 
-    override fun stop() = motion.stop()
+    // 屏幕上没有会拒绝意图的电机：这几个一律 ok。真机实现的 Ack 才有可能是 false（§12）。
+    override fun stop(): Ack {
+        motion.stop()
+        return Ack.OK
+    }
 
-    override fun velocity(vx: Float, vy: Float, wz: Float) = motion.velocity(vx, vy, wz)
+    override fun velocity(vx: Float, vy: Float, wz: Float): Ack {
+        motion.velocity(vx, vy, wz)
+        return Ack.OK
+    }
 
-    override fun gaze(yaw: Float, pitch: Float) = motion.gaze(yaw, pitch)
+    override fun gaze(yaw: Float, pitch: Float): Ack {
+        motion.gaze(yaw, pitch)
+        return Ack.OK
+    }
 
-    override fun stand() = motion.stand()
+    override fun stand(): Ack {
+        motion.stand()
+        return Ack.OK
+    }
 
-    override fun sit() = motion.sit()
+    override fun sit(): Ack {
+        motion.sit()
+        return Ack.OK
+    }
 
     override fun say(text: String) {
         if (text.isBlank()) return

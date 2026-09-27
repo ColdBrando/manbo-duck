@@ -6,8 +6,13 @@ import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
 import java.util.concurrent.atomic.AtomicInteger
 
-/** 规格 §2。 */
-enum class Kind { HEARD, SEEN, DID }
+/**
+ * 规格 §2 的三类，加上 `TEXT`。
+ *
+ * `TEXT` 是评审 P2 那条的后半：键盘打进来的话原来按 `heard` 记、意图里写「语音：xxx」，
+ * 模型会以为这句话是说出来的。识别的和打的分开记，说话的那条链一个字都没动。
+ */
+enum class Kind { HEARD, TEXT, SEEN, DID }
 
 data class Episode(
     val id: String,
@@ -37,6 +42,7 @@ fun Kind.wireName(): String = name.lowercase()
 
 fun kindOrNull(raw: String): Kind? = when (raw.trim().lowercase()) {
     "heard" -> Kind.HEARD
+    "text" -> Kind.TEXT
     "seen" -> Kind.SEEN
     "did" -> Kind.DID
     else -> null
@@ -44,6 +50,7 @@ fun kindOrNull(raw: String): Kind? = when (raw.trim().lowercase()) {
 
 fun maxCharsOf(kind: Kind): Int = when (kind) {
     Kind.HEARD -> HEARD_MAX_CHARS
+    Kind.TEXT -> HEARD_MAX_CHARS   // 一句话的长度，和听到的同一档
     Kind.SEEN -> SEEN_MAX_CHARS
     Kind.DID -> DID_MAX_CHARS
 }

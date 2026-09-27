@@ -27,7 +27,7 @@ import java.util.concurrent.Executors
  * 语音（§5，按住屏幕说话 + 静音窗口）、相机（§4.1）、真云端（§4.3）都接了。
  * debug 构建右上角有一列按钮（`DuckPanel`）直接驱动 `RobotPort`，其中「下一句台词」会发一句
  * 规格 §11 的手测台词走整条链；底部一条打字输入（`TextInputBar`）—— 打字和语音进的是同一条链
- * （`onHeard`）。长按屏幕已经让给"按住说话"，不再发演示台词。
+ * （`onTyped` / `onHeard`），只是事件分成 text 和 heard。长按屏幕已经让给"按住说话"。
  */
 class MainActivity : Activity() {
 
@@ -177,9 +177,9 @@ class MainActivity : Activity() {
                     rightMargin = 16
                 },
             )
-            // 打字入口：走 onHeard，和语音进来的是同一条链（§4.2）
+            // 打字入口：和语音进来的是同一条链（§4.2），只是事件记成 text
             root.addView(
-                TextInputBar(this) { line -> agent.execute { onHeard(line, state) } }.view,
+                TextInputBar(this) { line -> agent.execute { onTyped(line, state) } }.view,
                 FrameLayout.LayoutParams(
                     FrameLayout.LayoutParams.MATCH_PARENT,
                     FrameLayout.LayoutParams.WRAP_CONTENT,

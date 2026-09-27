@@ -19,19 +19,20 @@ APK；JVM 单测用的是真实现（Android 的本地单测里 `org.json` 是�
 
 ```
 按住说话 ──► SpeechRecognizer ──►（静音窗口：鸭子说话时丢掉）──► onHeard
+打字输入 ──► onTyped ────────────────────────────────────────────┘
                                                                     │
 相机每 2 秒一拍 ──►「看到」一行 ─┐                                   │
 做过的事 ──►「did」一行 ────────┴──► episodes.jsonl（全在本机）      │
                                                                     ▼
-                                    拼意图：语音 + 听到 + 看到 + 做过 + 问题
+                                    拼意图：语音/打字 + 听到 + 看到 + 做过 + 问题
                                                                     │
                                           DeepSeek（SSE 流式，8 秒无 token 报错）
                                                                     │
                               ReAct：Thought / Action / Final Answer（最多 8 步）
                                                                     │
                      动作白名单 + 裁剪 + 近距离拒绝 ──► RobotPort ──► 屏幕上的鸭子
-                                                                    │
-                                                        每条动作落一条 did
+                                                                    │           │
+                                                        每条动作落一条 did ◄── Ack
 ```
 
 ## core 的文件
@@ -50,7 +51,7 @@ APK；JVM 单测用的是真实现（Android 的本地单测里 `org.json` 是�
 | `MuteWindow.kt` | 静音窗口：说话期间和说完 800 ms 内丢掉识别结果 |
 | `CloudStream.kt` | 云端线格式：请求体怎么拼、SSE 里正文取哪个字段 |
 | `Dance.kt` | 《哈基米》舞步：八拍一循环的关键帧 + 插值 |
-| `RobotPort.kt` | `RobotPort` / `CloudClient` / `SensePort` 三个接口（唯一长期不变的契约） |
+| `RobotPort.kt` | `RobotPort` / `CloudClient` / `SensePort` 三个接口（唯一长期不变的契约）；运动类方法回 `Ack`，真机拒绝的原因进 `did` |
 
 ## app 的文件
 

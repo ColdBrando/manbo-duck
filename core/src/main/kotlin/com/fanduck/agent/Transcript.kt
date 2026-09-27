@@ -26,9 +26,27 @@ fun transcriptChars(transcript: Transcript): Int =
 
 fun needsCompact(transcript: Transcript): Boolean = transcriptChars(transcript) > TRANSCRIPT_CHAR_LIMIT
 
+/** 压缩后留在工作轨迹里的尾巴条数（规格 §3.6 的 keep 6）。 */
+const val COMPACT_KEEP_TAIL = 6
+
+/**
+ * 规格 §3.6 的切割：尾巴 6 条留在工作轨迹，其余交给云端汇总。
+ *
+ * 评审 P0-3：一轮里 tool 往返会把消息推过 6 条，**本轮的 user 意图**（最后一条 user 消息）
+ * 就被切进 drop、被摘要掉 —— 模型从第 7 条消息起看不到用户问的到底是什么。所以本轮意图
+ * 单独钉住，keep 的上界变成 7 条；被跳过的那几条（同一轮里更早的往返）照样进摘要。
+ *
+ * 本轮意图本来就在尾巴里（常态）时不钉，行为与规格一致。
+ */
 fun splitForCompact(transcript: Transcript): Pair<List<TranscriptMessage>, List<TranscriptMessage>> {
-    val keep = transcript.messages.takeLast(6)
-    val drop = transcript.messages.dropLast(6)
+    val messages = transcript.messages
+    val tailStart = maxOf(0, messages.size - COMPACT_KEEP_TAIL)
+    val anchor = messages.indexOfLast { it.role == "user" }
+    if (anchor < 0 || anchor >= tailStart) {
+        return messages.take(tailStart) to messages.drop(tailStart)
+    }
+    val keep = listOf(messages[anchor]) + messages.drop(tailStart)
+    val drop = messages.filterIndexed { index, _ -> index < tailStart && index != anchor }
     return drop to keep
 }
 

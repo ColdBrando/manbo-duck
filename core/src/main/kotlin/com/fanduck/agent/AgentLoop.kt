@@ -13,8 +13,8 @@ const val GIVE_UP_SAY = "我没想好"
 
 /** 规格 §7。不要改动作名。 */
 val SYSTEM_PROMPT = """
-你是超能花钱鸭的交互大脑。用户刚说的话在「语音」里。
-「听到」「看到」「做过」是鸭子端上的记忆，不是你亲眼看到的画面。
+你是超能花钱鸭的交互大脑。用户刚说的话在「语音」里，用键盘打进来的是「打字」。
+「听到」「打字」「看到」「做过」是鸭子端上的记忆，不是你亲眼看到的画面。
 没有记录的事情就说记录里没有，不要编造。
 
 你可以：
@@ -45,7 +45,8 @@ class AgentState(
     var transcript: Transcript = Transcript(),
     val episodes: MutableList<Episode> = mutableListOf(),
     var busy: Boolean = false,
-    val queue: MutableList<String> = mutableListOf(),
+    /** 等着的还没轮到的句子。连来源一起存：排队时说话和打字可以混在一起。 */
+    val queue: MutableList<Pair<String, Kind>> = mutableListOf(),
     val now: () -> String = ::isoNow,
     val sleep: (Int) -> Unit = { ms -> Thread.sleep(ms.toLong()) },
     val archive: (List<TranscriptMessage>) -> Unit = {},
@@ -62,30 +63,39 @@ fun appendEpisode(state: AgentState, kind: Kind, text: String, media: String = "
  * 听到一句之后。识别结束才调用这里；音频本身不上传。
  * 短于 2 字只记不推理。busy 时排队，当前一轮结束后按队列继续。
  */
-fun onHeard(raw: String, state: AgentState) {
+fun onHeard(raw: String, state: AgentState) = onUtterance(raw, Kind.HEARD, state)
+
+/**
+ * 键盘打进来的一句（debug 输入条）。和语音走同一条链，只是事件记成 `text`、
+ * 意图里写「打字：」—— 模型不该以为这句话是说出来的。
+ */
+fun onTyped(raw: String, state: AgentState) = onUtterance(raw, Kind.TEXT, state)
+
+/** 听到的和打进来的共用这一段：排队、busy、短句只记不推理，都一样。 */
+fun onUtterance(raw: String, kind: Kind, state: AgentState) {
     val text = raw.trim()
     if (text.isEmpty()) return
-    appendEpisode(state, Kind.HEARD, text)   // 短于 2 字也记
+    appendEpisode(state, kind, text)   // 短于 2 字也记
     if (text.length < 2) return
     if (state.busy) {
-        state.queue += text
+        state.queue += text to kind
         return
     }
     state.busy = true
     try {
-        runReact(text, state)
+        runReact(text, state, kind)
     } finally {
         state.busy = false
         if (state.queue.isNotEmpty()) {
-            val next = state.queue.removeAt(0)
-            onHeard(next, state)
+            val (next, nextKind) = state.queue.removeAt(0)
+            onUtterance(next, nextKind, state)
         }
     }
 }
 
-fun runReact(utterance: String, state: AgentState) {
-    // 当前这句已经写成一条 heard，所以「听到」里可以出现刚才的原话。
-    val intent = buildIntent(utterance, state.episodes, state.now())
+fun runReact(utterance: String, state: AgentState, source: Kind = Kind.HEARD) {
+    // 当前这句已经写成一条事件（heard 或 text），所以对应那块里可以出现刚才的原话。
+    val intent = buildIntent(utterance, state.episodes, state.now(), source)
     state.transcript = state.transcript.copy(
         messages = state.transcript.messages + TranscriptMessage("user", intent),
     )
@@ -101,9 +111,13 @@ fun runReact(utterance: String, state: AgentState) {
 private fun reactLoop(state: AgentState) {
     repeat(MAX_REACT_STEPS) { index ->
         val step = index + 1
-        // 评审 P0-2：这个调用本身要访问云端，异常不在下面的 try 里，会穿出 onHeard 的 finally。
-        // 规格就是这么写的，先照做；要不要给它包一层降级，等你定。
-        state.transcript = compactIfNeeded(state.transcript, state.cloud, state.archive)
+        // 评审 P0-2：压缩自己也要访问云端，异常不能穿出 onHeard 的 finally ——
+        // 那会让这一句语音白说（连"听不清"都来不及说）。降级：压缩失败就当这轮不压缩，照常推理。
+        state.transcript = try {
+            compactIfNeeded(state.transcript, state.cloud, state.archive)
+        } catch (e: Exception) {
+            state.transcript
+        }
         val messages = pack(state.transcript)
         val sent = if (step == MAX_REACT_STEPS) {
             messages + mapOf("role" to "user", "content" to STEP_LIMIT_HINT)
@@ -174,6 +188,9 @@ private fun executeTool(name: String, inputJson: String, state: AgentState): Str
 /**
  * 逐条处置动作。say 先播，且不受任何过滤影响；每条实际发出或被拒绝的动作都追加 did。
  * velocity 发出去之后在 agent 线程上等待 ms 毫秒再 stop，等待期间不发第二个云端请求。
+ *
+ * `did` 记的是 `RobotPort` 回来的结果，不是"我们调过了"（评审 P1-4）：真机拒绝时，
+ * 原因照样落进事件流，模型下一轮能看到。
  */
 private fun dispatch(command: FinalCommand, state: AgentState) {
     if (command.say.isNotEmpty()) state.robot.say(command.say)
@@ -185,18 +202,27 @@ private fun dispatch(command: FinalCommand, state: AgentState) {
             continue
         }
         val action = decision.action
-        when (action.name) {
+        val ack = when (action.name) {
             "stop" -> state.robot.stop()
             "stand" -> state.robot.stand()
             "sit" -> state.robot.sit()
             "gaze" -> state.robot.gaze(action.yaw, action.pitch)
             "velocity" -> {
-                state.robot.velocity(action.vx, action.vy, action.wz)
-                state.sleep(action.ms)
-                state.robot.stop()
+                val started = state.robot.velocity(action.vx, action.vy, action.wz)
+                // 没跑起来就别等那 ms，也别补一个 stop —— 等的是"走完这一步"，不是"走了"。
+                if (started.ok) {
+                    state.sleep(action.ms)
+                    state.robot.stop()
+                }
+                started
             }
+            else -> Ack.OK
         }
-        appendEpisode(state, Kind.DID, "动作 ${action.name} 结果 ok")
+        if (ack.ok) {
+            appendEpisode(state, Kind.DID, "动作 ${action.name} 结果 ok")
+        } else {
+            appendEpisode(state, Kind.DID, "动作 ${action.name} 结果 fail 原因 ${ack.reason}")
+        }
     }
 }
 
@@ -234,15 +260,17 @@ fun compactIfNeeded(
     if (!needsCompact(transcript)) return transcript
     val (drop, keep) = splitForCompact(transcript)
     if (drop.isEmpty()) return transcript
-    archive(drop)
     val prompt = buildString {
         append("把下面这段旧轨迹收成不超过 $SUMMARY_MAX_CHARS 字的摘要，只输出摘要正文，不要标题。\n")
         if (transcript.summary.isNotBlank()) append("旧摘要：\n${transcript.summary}\n\n")
         append("要压缩的轨迹：\n")
         for (message in drop) append("${message.role}: ${message.content}\n")
     }
+    // 先要到摘要再归档：反过来的话，云端失败时同一条消息既在归档里又在工作轨迹里，
+    // 下一次压缩会把它们再归档一遍。
     val summary = cloud.complete(listOf(mapOf("role" to "user", "content" to prompt)))
         .trim()
         .take(SUMMARY_MAX_CHARS)
+    archive(drop)
     return Transcript(summary, keep)
 }

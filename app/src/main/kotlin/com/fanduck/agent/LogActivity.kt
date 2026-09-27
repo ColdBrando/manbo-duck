@@ -365,12 +365,14 @@ private fun roleColor(role: String): Color = when (role) {
 
 private fun kindLabel(kind: Kind): String = when (kind) {
     Kind.HEARD -> "听到"
+    Kind.TEXT -> "打字"
     Kind.SEEN -> "看到"
     Kind.DID -> "做过"
 }
 
 private fun kindColor(kind: Kind): Color = when (kind) {
     Kind.HEARD -> Color(0xFF8FC7FF)
+    Kind.TEXT -> Color(0xFF7FD1A8)
     Kind.SEEN -> Color(0xFFD8B473)
     Kind.DID -> Color(0xFFB8A0E8)
 }

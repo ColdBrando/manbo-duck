@@ -22,11 +22,11 @@ class SenseLoopTest {
         },
         robot = object : RobotPort {
             override fun padActive() = false
-            override fun stop() = Unit
-            override fun velocity(vx: Float, vy: Float, wz: Float) = Unit
-            override fun gaze(yaw: Float, pitch: Float) = Unit
-            override fun stand() = Unit
-            override fun sit() = Unit
+            override fun stop() = Ack.OK
+            override fun velocity(vx: Float, vy: Float, wz: Float) = Ack.OK
+            override fun gaze(yaw: Float, pitch: Float) = Ack.OK
+            override fun stand() = Ack.OK
+            override fun sit() = Ack.OK
             override fun say(text: String) = Unit
         },
         sense = sense,

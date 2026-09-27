@@ -17,12 +17,11 @@ import android.widget.EditText
 import android.widget.LinearLayout
 
 /**
- * 打字输入条：语音识别接上之前，用键盘代替"听到一句"。发送后喂给 `onHeard`，
- * 走的就是 §4.2 那条链（拼意图 → 云端 → dispatch → did 落盘），鸭子照样用 TTS 出声回答。
+ * 打字输入条：键盘代替"说一句"。发送后喂给 `onTyped`，走的就是 §4.2 那条链
+ * （拼意图 → 云端 → dispatch → did 落盘），鸭子照样用 TTS 出声回答。
  *
- * **一个要记住的语义偏差**：打字进来的话会按"听到"记（`Kind.HEARD`），意图里也写
- * 「语音：xxx」（§2 只有 heard/seen/did 三类，§3.3 只写了「语音：」）。所以模型会以为
- * 这句话是说出来的。真接了语音识别以后，这条要么删掉，要么规格里加一个 `Kind.TEXT`。
+ * 事件记成 `Kind.TEXT`、意图里写「打字：xxx」—— 起初是按 `heard` 记的（模型会以为这句话
+ * 是说出来的），评审 P2 之后分了单独一类，说话那条链一个字都没动。
  *
  * 和 `DuckPanel` 一样只挂 debug 构建（§6.5 的屏幕是一整块 WebView，没有控件）。
  * 每次发送往 logcat 打一条 `duck-input`。

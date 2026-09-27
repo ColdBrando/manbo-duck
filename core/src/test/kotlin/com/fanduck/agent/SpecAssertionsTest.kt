@@ -37,12 +37,38 @@ class SpecAssertionsTest {
         val gazeCalls = mutableListOf<Pair<Float, Float>>()
         val named = mutableListOf<String>()
         var pad = false
+
+        /** 要拒绝哪个动作就放进来（§12：真机的电机服务可以拒绝意图）。 */
+        val refused = mutableMapOf<String, String>()
+
+        private fun ack(name: String): Ack = refused[name]?.let { Ack.refused(it) } ?: Ack.OK
+
         override fun padActive() = pad
-        override fun stop() { named += "stop" }
-        override fun velocity(vx: Float, vy: Float, wz: Float) { velocityCalls += Vel(vx, vy, wz) }
-        override fun gaze(yaw: Float, pitch: Float) { gazeCalls += yaw to pitch }
-        override fun stand() { named += "stand" }
-        override fun sit() { named += "sit" }
+        override fun stop(): Ack {
+            named += "stop"
+            return ack("stop")
+        }
+
+        override fun velocity(vx: Float, vy: Float, wz: Float): Ack {
+            velocityCalls += Vel(vx, vy, wz)
+            return ack("velocity")
+        }
+
+        override fun gaze(yaw: Float, pitch: Float): Ack {
+            gazeCalls += yaw to pitch
+            return ack("gaze")
+        }
+
+        override fun stand(): Ack {
+            named += "stand"
+            return ack("stand")
+        }
+
+        override fun sit(): Ack {
+            named += "sit"
+            return ack("sit")
+        }
+
         override fun say(text: String) { sayCalls += text }
     }
 
@@ -62,6 +88,8 @@ class SpecAssertionsTest {
         robot: RobotPort = RecordingRobot(),
         sense: SensePort = FakeSense(),
         episodes: List<Episode> = emptyList(),
+        sleep: (Int) -> Unit = {},
+        archive: (List<TranscriptMessage>) -> Unit = {},
     ) = AgentState(
         cloud = cloud,
         robot = robot,
@@ -69,7 +97,8 @@ class SpecAssertionsTest {
         log = MemoryEpisodeSink { NOW },
         episodes = episodes.toMutableList(),
         now = { NOW },
-        sleep = {},
+        sleep = sleep,
+        archive = archive,
     )
 
     private fun didTexts(state: AgentState): List<String> =
@@ -140,10 +169,12 @@ class SpecAssertionsTest {
             listOf("Thought: 走\nFinal Answer: {\"say\":\"走\",\"actions\":[{\"name\":\"velocity\",\"vx\":1,\"ms\":300}]}"),
         )
         val robot = RecordingRobot()
-        val st = state(cloud, robot)
+        val slept = mutableListOf<Int>()
+        val st = state(cloud, robot, sleep = { slept += it })
         onHeard("过来", st)
         assertEquals(1, robot.velocityCalls.size)
         assertEquals(0.2f, robot.velocityCalls[0].vx, 0.0001f)
+        assertEquals(listOf(300), slept)   // 跑起来了才等这一步走完
         assertTrue(didTexts(st).any { it.contains("ok") })
     }
 
@@ -323,5 +354,92 @@ class SpecAssertionsTest {
         } finally {
             file.delete()
         }
+    }
+
+    // ---------- 评审留下的四条：改完在这里钉住 ----------
+
+    @Test
+    fun `打字进来记成 text，意图里写打字`() {
+        val cloud = FakeCloud()
+        val st = state(cloud)
+        onTyped("过来", st)
+        assertEquals(1, st.episodes.count { it.kind == Kind.TEXT })
+        assertEquals(0, st.episodes.count { it.kind == Kind.HEARD })
+        assertEquals(Kind.TEXT, kindOrNull("text"))   // 落盘后读得回来
+        val lastUser = cloud.requests.last().last { it["role"] == "user" }["content"]!!
+        assertTrue(lastUser.contains("打字：过来"))
+        assertFalse(lastUser.contains("语音：过来"))
+    }
+
+    @Test
+    fun `没打过字的时候 意图里没有打字块`() {
+        // 语音是主链路：没碰过键盘时，意图和 §3.3 原样一样是四个块
+        val seen = Episode("seen-1", TWO_MIN_AGO, Kind.SEEN, NO_DETECTOR_CAPTION)
+        val intent = buildIntent("过来", listOf(seen), NOW)
+        assertTrue(intent.contains("语音：过来"))
+        assertFalse(intent.contains("打字："))
+    }
+
+    @Test
+    fun `压缩请求失败时本轮照跑，也不归档`() {
+        // 轨迹超过上限 → 每轮开始前先压缩。让**压缩那一次**调用抛异常（评审 P0-2）。
+        val cloud = object : CloudClient {
+            var compactions = 0
+            override fun complete(messages: List<Map<String, String>>): String {
+                if (messages.any { it["content"]!!.contains("收成不超过") }) {
+                    compactions++
+                    throw RuntimeException("压缩超时")
+                }
+                return FINAL_EMPTY
+            }
+        }
+        val robot = RecordingRobot()
+        val archived = mutableListOf<TranscriptMessage>()
+        val st = AgentState(
+            cloud = cloud,
+            robot = robot,
+            sense = FakeSense(),
+            log = MemoryEpisodeSink { NOW },
+            transcript = Transcript(
+                messages = (1..40).map { TranscriptMessage("user", "第 $it 条" + "x".repeat(400)) },
+            ),
+            now = { NOW },
+            sleep = {},
+            archive = { archived += it },
+        )
+        onHeard("过来", st)                          // 异常不该穿出去
+        assertEquals(1, cloud.compactions)
+        assertTrue("没压成就不能归档", archived.isEmpty())
+        assertTrue(robot.sayCalls.contains("好"))      // 本轮照样走完
+        assertEquals(42, st.transcript.messages.size)  // 40 条原文 + 本轮意图 + 本轮回话
+    }
+
+    @Test
+    fun `轮内压缩不把本轮意图切进 drop`() {
+        // 一轮里走到第 8 条：user 意图 + 7 条工具往返。规格的裸 takeLast(6) 会把意图摘要掉。
+        val messages = listOf(TranscriptMessage("user", "语音：过来")) +
+            (1..7).map { TranscriptMessage("tool", "Observation: 第 $it 条") }
+        val (drop, keep) = splitForCompact(Transcript(messages = messages))
+        assertEquals(messages.size, drop.size + keep.size)   // 一条都不丢
+        assertEquals("语音：过来", keep.first().content)        // 问题留在工作轨迹里
+        assertTrue(drop.none { it.content == "语音：过来" })    // 没被拿去摘要
+        assertEquals(COMPACT_KEEP_TAIL + 1, keep.size)
+        assertEquals(messages[1], drop.single())              // 该进摘要的是更早的那条往返
+    }
+
+    @Test
+    fun `真机拒绝意图时 did 记真原因，也不再空等`() {
+        val cloud = FakeCloud(
+            listOf("Thought: 走\nFinal Answer: {\"say\":\"走\",\"actions\":[{\"name\":\"velocity\",\"vx\":0.2,\"ms\":500}]}"),
+        )
+        val robot = RecordingRobot()
+        robot.refused["velocity"] = "手柄占用"
+        val slept = mutableListOf<Int>()
+        val st = state(cloud, robot, sleep = { slept += it })
+        onHeard("过来", st)
+        assertEquals(1, robot.velocityCalls.size)                       // 意图确实发出去了
+        assertEquals("被拒绝就不该等这一步", 0, slept.size)
+        assertTrue(didTexts(st).any { it.contains("fail") && it.contains("手柄占用") })
+        assertFalse(didTexts(st).any { it.endsWith("ok") })
     }
 }
