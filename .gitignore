@@ -14,3 +14,7 @@ tools/duckmesh/package-lock.json
 
 # 方案设计（契约 + 内部决策记录，不进公开仓库；emin 2026-09-27 指定）
 机器人鸭子的本地agent方案设计.md
+
+# 录屏/截图的原始文件（要进 README 的请放 doc/media/ 并起个正经名字）
+Screen_recording_*.webm
+Screenshot_*.png
