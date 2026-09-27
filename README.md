@@ -1,7 +1,8 @@
 # duckApp — 屏幕上的鸭子（本地 agent）
 
-规格：[`机器人鸭子的本地agent方案设计.md`](机器人鸭子的本地agent方案设计.md)。那份文档是契约：
+**规格文档是本地契约，不在这个仓库里**（它带着大量内部决策记录，见 `.gitignore`）：
 类型、函数、系数、动作白名单都以它为准，代码里凡是"按规格实现"的地方都标了 §节号。
+仓库里的 README（含 `tools/duckmesh/README.md`）是能公开的那部分说明。
 
 ## 工程结构
 
@@ -69,6 +70,14 @@ tools/duckmesh/     网格生成管线（Python + Node/meshoptimizer），见它
   所以 duck.js 每帧按脚部网格最低点补一个竖直偏移。
 * **正面机位 + 软跟随**：鸭子正对观众固定在屏幕中间，可以先走出去 5 cm（看得见在走），
   镜头再平滑追回来，偏离上限是硬的 —— 一步 16 cm，固定斜机位那版走两步就出画了。
+
+## 许可
+
+* **代码**：Apache-2.0（见 [LICENSE](LICENSE)）。
+* **模型网格** `app/src/main/assets/duck/duck-meshes.js`：**CC BY-SA-NC** —— 从
+  [pollen-robotics/microduck](https://github.com/pollen-robotics/microduck) 的模型文件生成，
+  声明见同目录的 `duck-meshes.LICENSE.txt`。自用没问题；**对外分发 / 售卖 / 上架之前要先解决
+  NC 这一条**。
 
 > **授权**：真机 3D 模型文件是 **CC BY-SA-NC**（上游 `microduck_rl/README.md` 声明），
 > 所以 `duck-meshes.js` 也是这个许可，声明随文件放在 `duck-meshes.LICENSE.txt`。
