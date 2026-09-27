@@ -14,6 +14,13 @@ def duckProp = { String name, String fallback ->
     duckProps.getProperty(name, fallback).replace('\\', '\\\\').replace('"', '\\"')
 }
 
+// 签名：在 local.properties 里配 duck.storeFile / duck.storePassword / duck.keyAlias /
+// duck.keyPassword 就会用它签 release；没配就出一个未签名的包（装不上别人的手机，
+// 自己本地调试够用）。**不要把 keystore 和密码提交进仓库。**
+//   keytool -genkeypair -v -keystore duck-release.jks -keyalg RSA -keysize 2048 \
+//           -validity 10000 -alias duck
+def storePath = duckProps.getProperty('duck.storeFile', '')
+
 android {
     namespace 'com.fanduck.agent'
     compileSdk 34
@@ -38,9 +45,32 @@ android {
         buildConfigField 'String', 'DUCK_API_KEY', "\"${duckProp('duck.apiKey', '')}\""
     }
 
+    signingConfigs {
+        release {
+            if (storePath) {
+                storeFile file(storePath)
+                storePassword duckProps.getProperty('duck.storePassword', '')
+                keyAlias duckProps.getProperty('duck.keyAlias', '')
+                keyPassword duckProps.getProperty('duck.keyPassword', '')
+            }
+        }
+    }
+
     buildTypes {
         release {
-            minifyEnabled false
+            // 日志页那套 Compose + ML Kit 没混淆时 dex 就有 14 MB。各家的 AAR 自带
+            // consumer rules，这里只需要 proguard-rules.pro 兜底。
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            if (storePath) {
+                signingConfig signingConfigs.release
+            }
+            // **release 不编 duck.apiKey**。那份 key 是自己的，编进包里就等于谁拿到 APK
+            // 谁拿到 key（DeepSeek 是预付费，被刷是自己的钱）。要给自己出一个能连云端的
+            // release 包，就在 local.properties 里单独填 duck.releaseApiKey。
+            // 不填的话 release 会退回演示假大脑（ScriptedCloud），没网也能跑。
+            buildConfigField 'String', 'DUCK_API_KEY', "\"${duckProp('duck.releaseApiKey', '')}\""
         }
     }
 

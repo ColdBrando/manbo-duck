@@ -40,6 +40,18 @@
     77% / 73% / 71% / 73%），文字一变就写一条新事件，`shouldWriteSeen` 的去重直接失效 ——
     10 秒里灌了 5 条同一个东西。分数字段留着做阈值和排序，别往外写。
 
+## 打包
+
+15. **release 包默认没有 key**，跑起来是演示假大脑 —— 这不是坏了，是 `app/build.gradle` 里
+    故意的（`duck.apiKey` 只给 debug，release 只认 `duck.releaseApiKey`）。看到
+    `没有云端 key，用演示假大脑` 这条 logcat 就知道是这种情况。
+16. **APK 只有 arm64-v8a**。检测器带的 `libmlkitcommonpipeline.so` 按 4 个 ABI 各打一份、
+    合计 40 MB，`ndk.abiFilters` 只留了 arm64（`app/build.gradle`）。**x86_64 的模拟器装不上**，
+    要装就把 ABI 加回白名单。
+17. **release 开了 R8**（`minifyEnabled` + `shrinkResources`）：debug 37 MB → release 19 MB。
+    各家的 AAR 自带 consumer rules，`proguard-rules.pro` 现在是空的；哪天加了 keep 规则，
+    **把原因也写进去**。验过一次：签名装到模拟器上能起来、不崩。
+
 ## 环境
 
 8. **API 28 的 AOSP 镜像 WebGL 上不了屏**：最小 WebGL 探针页（`assets/duck/webgl-probe.html`，

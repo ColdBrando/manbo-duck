@@ -243,7 +243,12 @@ class MainActivity : Activity() {
         val endpoint = debugExtra("endpoint") ?: BuildConfig.DUCK_ENDPOINT
         val apiKey = debugExtra("apiKey") ?: BuildConfig.DUCK_API_KEY
         if (apiKey.isBlank()) {
-            Log.i(CLOUD_TAG, "local.properties 里没有 duck.apiKey，用演示假大脑")
+            // release 恒走这里：它不编 duck.apiKey（见 app/build.gradle），
+            // 要给自己出一个能连云端的 release 包就填 duck.releaseApiKey。
+            Log.i(
+                CLOUD_TAG,
+                "没有云端 key，用演示假大脑（debug 取 duck.apiKey，release 取 duck.releaseApiKey）",
+            )
             return ScriptedCloud()
         }
         Log.i(CLOUD_TAG, "云端 $endpoint，模型 ${BuildConfig.DUCK_MODEL}")

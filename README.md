@@ -51,6 +51,7 @@
 ```bash
 ./gradlew :core:test          # 纯逻辑断言，不需要 SDK、模拟器或设备
 ./gradlew :app:assembleDebug  # → app/build/outputs/apk/debug/app-debug.apk
+./gradlew :app:assembleRelease # → app/build/outputs/apk/release/（R8 开，19 MB）
 ```
 
 云端配置放在 `local.properties`（这份文件不进版本库）：
@@ -59,7 +60,13 @@
 duck.endpoint=https://api.deepseek.com/chat/completions
 duck.model=deepseek-chat
 duck.apiKey=sk-...        # 留空就退回演示用的假大脑，没网也能跑
+duck.releaseApiKey=       # 只给 release 用。见下
 ```
+
+**key 是明文编进包里的，所以分成两个**：`duck.apiKey` 只进 debug 包（自己天天用的那个），
+`duck.releaseApiKey` 只进 release 包、默认空 —— 也就是说**默认编出来的 release 包不含任何 key**，
+拿给谁都不会漏（代价是它只会用演示假大脑）。要签名就再填 `duck.storeFile` /
+`duck.storePassword` / `duck.keyAlias` / `duck.keyPassword`，不填就出未签名的包。
 
 ```bash
 adb install -r app/build/outputs/apk/debug/app-debug.apk

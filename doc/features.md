@@ -56,8 +56,12 @@ OpenAI 兼容（默认 DeepSeek）。请求体只有 `model` / `messages` / `max
 8 秒就是"8 秒没有下一个 token 抛异常"（每读到一块就重置）；**连接阶段**失败才重试 1 次，
 读数据阶段的超时不重试。
 
-`local.properties` 里没填 `duck.apiKey` 就退回演示用的假大脑（`ScriptedCloud`），没网也能跑。
-key 会明文编进 `BuildConfig`，构建产物别给别人。
+`local.properties` 里没填 key 就退回演示用的假大脑（`ScriptedCloud`），没网也能跑。
+
+**key 分两个属性**：`duck.apiKey` 只进 debug 包，`duck.releaseApiKey` 只进 release 包
+（默认空）。key 是明文编进 `BuildConfig` 的，所以 release 那个默认不留 —— 编出来的 release 包
+不含任何 key，拿给谁都不会漏。验证过：`unzip -p app-release-unsigned.apk 'classes*.dex' |
+grep -a -o 'sk-.\{20,\}'` 是 0 处，debug 包是 1 处。
 
 logcat：`duck-cloud` 打端点、每轮发出的条数/字节数、模型的原话、失败原因；`duck-say` 打鸭子说的
 每一句话。
