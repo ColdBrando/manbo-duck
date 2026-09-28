@@ -145,51 +145,73 @@ tauri-app/
 
 网格模型的许可见 `app/src/main/assets/duck/duck-meshes.LICENSE.txt`（CC BY-SA-NC）。
 
-## 手机上能不能跑（2026-09-28 实测，未完成）
+## 手机上能不能跑（2026-09-28 实测）
 
-在 `duck34`（API 34 google_apis，arm64）模拟器上实测过一轮。用**执行进度标记**定位
-（页面 `fetch('./_mark/<阶段>')`，请求会落在 HTTP 服务器日志里）——比截图可靠，
-Android 的 `screencap` 读不到硬件合成层。
+在 `duck34`（API 34 google_apis，arm64，宿主 Apple M4）模拟器上实测完毕。
 
-**已经证明能跑通的**（标记一个个走到）：
+**结论：我们的栈在 Android 上没问题；坏的是这台模拟器的 GPU。**
+
+### 通了的
+
+用**执行进度标记**定位（页面 `fetch('./_mark/<阶段>')`，请求落在 HTTP 服务器日志里）——
+比截图可靠，Android 的 `screencap` 读不到硬件合成层。标记一个个走到：
 
 ```
 ✓ mujoco-loaded       MuJoCo WASM 加载
 ✓ model-compiled      MJCF 编译完成（38 个网格进 VFS）
 ✓ onnx-session-ready  ONNX 会话建立
 ✓ three-imported / glb-loaded / rig-built
-✓ before-tick         进渲染循环
+✓ before-tick         进渲染循环，稳定 60 fps
 ```
 
-跑起来时 HUD 读到 **60 fps**、鸭子在走（`x/y` 在变）、直立度 -0.998。
-所以 WASM 物理 + 推理这一层在 Android WebView 上是通的，**不需要 SharedArrayBuffer**
-（我们用单线程构建，因此不需要 COOP/COEP 响应头）。
+HUD 可读时显示 **60 fps**、鸭子在走（`x/y` 在变）、直立度 -0.998。
+**不需要 SharedArrayBuffer**（单线程构建，因此也不需要 COOP/COEP 响应头）。
 
-**唯一没过的一关是 WebGL 上下文**。三点观察：
+矩阵测试还排除了几个嫌疑：`antialias` / `preserveDrawingBuffer` / `alpha` 的各种组合
+**全部能建出上下文**（顺带发现模拟器的 GL 不支持 MSAA，请求 `antialias: true`
+实际拿到的是 `aa0`）。
 
-1. 一开始 `duck34` 的 `hw.gpu.enabled = no`，Chrome 的 GPU 进程在崩溃循环
-   （`Reinitialized the GPU process after a crash`），页面连 CSS 都渲染不出来。
-2. 打开 GPU（`hw.gpu.mode = host`，宿主是 Apple M4）冷启动后：
-   - **WebGL2 可用**（`Android Emulator OpenGL ES Translator (Apple M4)`），
-     **WebGL1 不可用**
-   - 各种上下文属性组合都 OK，**连 three.js 的默认参数集也 OK**
-   - 一个只 `import 'three'` + `new WebGLRenderer()` + 渲染一个方块的最小页面**完全正常**
-   - 但我们的应用在建 renderer 时报 `Error creating WebGL context.`
-3. 把 renderer 提到最前面建（在加载那 55 MB 之前）之后，进度**一路走到了渲染循环**，
-   HUD 读到 60 fps。所以怀疑是**资源压力**（内存/GPU 资源）导致晚建上下文失败。
+### 没通的：模拟器的 GPU 进程在崩溃循环
 
-**但最后一次复验又失败了**，而且那次唯一的差别是打开了 `preserveDrawingBuffer`
-（为了从画布读回像素验证 WebGL 真的在画）。所以这条还没定论。
+```
+logcat:  GPU process exited unexpectedly: exit_code=0
+         The GPU process has crashed 5 time(s) / 6 time(s)
+页面:    A-CTX-LOST-at-616ms      ← 上下文 616 毫秒时就丢了
+         drawingBufferWidth/Height = 0   ← 丢了之后画布永久变 0×0
+```
 
-**明天要做的**：
+**关键对照**：一个**只渲染旋转方块**的最小页面（不加载 MuJoCo、不加载网格）
+症状一模一样 —— 建得出上下文、立刻丢失、之后每帧 `drawingBuffer 0×0`、GPU 崩 6 次。
 
-- [ ] 把 renderer 提前这个改动在**干净状态**下重跑三次，确认不是偶然
-- [ ] 单独验 `preserveDrawingBuffer: true` 是不是会触发失败（它会让 Chrome 多留一份缓冲）
-- [ ] 从画布读回像素，确认 WebGL **真的在画**（现在只有"HUD 在刷新"这一个证据，
-      截图读不到硬件合成层）
-- [ ] 上面都过了再上**真机**——模拟器的图形栈终究是转译层，帧率不代表真机
+所以**不是我们的应用压垮的**，是这台模拟器上任何持续 WebGL 渲染都会让 Chrome 的
+GPU 进程崩溃。两种 GPU 模式都试过：
 
-**如果真要在手机上落地，还有四件工程活**（不只是验证）：
+| `hw.gpu.mode` | 结果 |
+|---|---|
+| `host`（Apple M4 直通） | 崩 |
+| `swiftshader_indirect`（软件渲染） | 一样崩 |
+
+### 顺手挖出并修掉的两个真 bug
+
+**① canvas 0×0**（最隐蔽的一个）。表现极具迷惑性：**循环照跑 60 fps、物理照算、
+HUD 照刷新，只是屏幕上什么都没有**。
+
+原因和 `duck.js` 里记的那个坑**一模一样**：模块在页面布局完成之前就执行到了
+`setSize(innerWidth, innerHeight)`，那时两个值都是 0，canvas 被定死成 0×0 且不会自愈。
+当初把 renderer 提到最前面（见下）恰好把它挪进了这个窗口期。
+修法：每帧 `syncSize()` 对一次尺寸，比只挂 `resize` 事件稳。
+
+**② WebGL 上下文建得太晚**。等 55 MB 重资源（10 MB mujoco.wasm + 20 MB 网格进 VFS +
+14 MB ort.wasm + 7.4 MB GLB／43 万三角面）都吃进内存之后再建上下文，three.js 会报
+`Error creating WebGL context.`；提到最前面之后就稳定了（4/4 次到渲染循环）。
+两种情况都不是必然复现，所以**归因为"内存压力下更容易失败"**，不是确定因果。
+
+### 还没验的
+
+**真机**。模拟器的图形栈是转译层，而且这台根本跑不了持续 WebGL，
+所以"手机上到底能不能看见鸭子"这个问题，只有真机能回答。
+
+### 如果真要在手机上落地，还有四件工程活（不只是验证）
 
 1. **资源体积**：55 MB 要进 APK（10 MB mujoco.wasm + 14 MB ort wasm + 20 MB STL +
    7.4 MB GLB）。GLB 那 431k 三角面对低端机偏重

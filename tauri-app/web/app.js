@@ -62,19 +62,34 @@ const THREE = await import('three');
 
 // MJCF 是 z 朝上，three.js 默认 y 朝上。这里不动数据、也不转场景，直接把相机的
 // up 设成 z —— 屏幕上的坐标和 MJCF 一一对应，对照调试时少绕一层。
-const camera = new THREE.PerspectiveCamera(38, innerWidth / innerHeight, 0.01, 20);
+// 宽高比可能是 0/0 = NaN（页面还没布局），syncSize() 会立刻纠正；先给 1 兜住
+const camera = new THREE.PerspectiveCamera(38, innerWidth / innerHeight || 1, 0.01, 20);
 camera.up.set(0, 0, 1);
 
 // preserveDrawingBuffer：只有排障要读回画面时才开（不然缓冲已被清掉，采到永远是黑）。
 // 平时关着，省一次拷贝。
 const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: TELEMETRY });
-renderer.setSize(innerWidth, innerHeight);
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.0;
 document.body.appendChild(renderer.domElement);
+
+// 尺寸：模块可能在**页面布局完成之前**就执行到这儿，那时 innerWidth/innerHeight 是 0，
+// setSize 会把 canvas 定成 0×0 —— 而且之后不会自己恢复。表现极具迷惑性：
+// **循环照跑、fps 正常、物理也正常，只是屏幕上什么都没有**。
+// duck.js 里踩过同一个坑（那边靠 DuckView 在页面加载后补调一次 resize）。
+// 这里每帧对一次尺寸，比只挂在 resize 事件上稳，代价可以忽略。
+let lastW = -1, lastH = -1;
+function syncSize() {
+  if (innerWidth === lastW && innerHeight === lastH) return;
+  lastW = innerWidth; lastH = innerHeight;
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+}
+syncSize();
 
 // ── 物理 ─────────────────────────────────────────────────────────────────────
 const mj = await (await import('./lib/mujoco.js')).default();
@@ -292,6 +307,7 @@ async function tick() {
   }
   if (acc > CTRL_DT * 8) acc = 0;
 
+  syncSize();                 // 页面布局完成之后才拿到真实尺寸，见上面的注释
   syncBodies();
   followCam(n === 0);
   renderer.render(scene, camera);
@@ -312,11 +328,7 @@ async function tick() {
   }
 }
 
-addEventListener('resize', () => {
-  camera.aspect = innerWidth / innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(innerWidth, innerHeight);
-});
+// 尺寸每帧已经对过了（syncSize），这里不用再挂 resize
 
 // ── 输入 ─────────────────────────────────────────────────────────────────────
 // 桌面没有触摸屏，手机那套"按住说话"在这儿没有对应物。这一版只做运动和视角。
