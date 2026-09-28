@@ -1,0 +1,304 @@
+// 桌面鸭子：MuJoCo(WASM) 算物理、ONNX 跑策略、three.js 画。
+//
+// 和手机那套（WebView + `duck.js` 播烘好的关节角）是**两条不同的路**：
+//   - 手机：`tools/duckgait/bake_gait.py` 离线录一段周期步态 → `gaits.json` → 放动画
+//   - 这里：策略**实时推理**，物理**真的在算** —— 所以能摔、能碰、能跑全部技能，
+//     代价是桌面端自带一套 20 MB 的模型资源和两个 WASM 运行时，且和 Android 不共用前端。
+//
+// 观测向量 61 维、动作 14 维、控制 50 Hz —— 全部对齐真机 runtime，见下面每处的注释。
+
+// ── 常量 ─────────────────────────────────────────────────────────────────────
+// 关节顺序 == MJCF 里执行器的顺序 == 策略输出 14 维的顺序。
+// 和屏幕鸭子（duck.js）那 15 个关节比，少了嘴（那边下标 9）：MJCF 里嘴不是独立关节。
+const JOINT_NAMES = [
+  'left_hip_yaw', 'left_hip_roll', 'left_hip_pitch', 'left_knee', 'left_ankle',
+  'neck_pitch', 'head_pitch', 'head_yaw', 'head_roll',
+  'right_hip_yaw', 'right_hip_roll', 'right_hip_pitch', 'right_knee', 'right_ankle',
+];
+// 静止站姿，和 MJCF 的 INIT 关键帧一致。策略输出的动作是**相对它**的偏移。
+const DEFAULT_POSE = new Float32Array([
+  0, -0.08726646259971647, -0.457924, -0.004940, 0.452984,
+  0.3490658503988659, 0.3490658503988659, 0, 0,
+  0, 0.08726646259971647, 0.457924, 0.004940, -0.452984,
+]);
+const NUM_JOINTS = 14;
+const OBS_SIZE = 61;
+const CMD_SIZE = 13;          // twist(3) + head(4) + body(6)
+const TIMESTEP = 0.005;       // 物理 200 Hz
+const DECIMATION = 4;         // 每 4 个物理步做一次推理 → 控制 50 Hz
+const CTRL_DT = TIMESTEP * DECIMATION;
+
+// 排障开关（平时都别开）：
+//   STATIC     冻在 qpos0 不跑策略，用来和 MuJoCo 原生渲染逐帧对照
+//   ONLY       只显示一个 body，用来把装配问题缩到单个 body 上
+//   TELEMETRY  把状态 POST 给 tools/telemetry.py（先跑起来再开），
+//              连画面一起传出来 —— 比 screencapture 干净：不抓用户屏幕上别的东西，
+//              窗口被遮住也照样拿得到。服务器没起时 fetch 静默失败，不影响正常使用。
+const STATIC = false;
+const ONLY = '';
+const TELEMETRY = false;
+
+const hud = document.getElementById('hud');
+const errEl = document.getElementById('err');
+const fail = (m) => { errEl.textContent = String(m); console.error(m); };
+
+const TEL = 'http://127.0.0.1:8791/';
+const tel = (m) => { if (TELEMETRY) { try { fetch(TEL, { method: 'POST', mode: 'no-cors', body: String(m) }); } catch (_) {} } };
+const telShot = (tag) => {
+  if (!TELEMETRY) return;
+  try {
+    fetch(TEL + 'shot/' + tag, { method: 'POST', mode: 'no-cors',
+      body: renderer.domElement.toDataURL('image/png') });
+  } catch (_) {}
+};
+
+// ── 物理 ─────────────────────────────────────────────────────────────────────
+const mj = await (await import('./lib/mujoco.js')).default();
+
+// MJCF 和它的网格要装进虚拟文件系统：WASM 里没有真的文件系统，
+// `<include>` 和 `<mesh file=...>` 都按名字在 VFS 里找。
+const vfs = new mj.MjVFS();
+const robotXml = await (await fetch('./robot/robot_groundcontact.xml')).text();
+const meshFiles = [...new Set([...robotXml.matchAll(/<mesh\s+file="([^"]+)"/g)].map(m => m[1]))];
+for (const f of meshFiles) {
+  const r = await fetch('./robot/assets/' + f);
+  if (!r.ok) throw new Error(`网格取不到: ${f} (${r.status})`);
+  vfs.addBuffer('assets/' + f, new Uint8Array(await r.arrayBuffer()));
+}
+// scene.xml 用 <include> 引它；VFS 里按文件名找，所以名字要对上
+vfs.addBuffer('robot_groundcontact.xml', new TextEncoder().encode(robotXml));
+
+const model = mj.from_xml_string(await (await fetch('./robot/scene.xml')).text(), vfs);
+const data = new mj.MjData(model);
+
+// 地址表：观测里每一项从哪取
+const adr = {
+  qposAdr: JOINT_NAMES.map(n => model.jnt(n).qposadr),
+  dofAdr: JOINT_NAMES.map(n => model.jnt(n).dofadr),
+  gyroAdr: model.sensor('imu_ang_vel').adr,
+  trunkId: mj.mj_name2id(model, mj.mjtObj.mjOBJ_BODY.value, 'trunk_base'),
+};
+
+// ── 策略 ─────────────────────────────────────────────────────────────────────
+const ort = await import('./lib/ort.mjs');
+// 显式指定只走 wasm 后端：默认会先试 webgpu(jsep)，那个变体我们不提供，
+// 而 Tauri 的 dev server 对缺失文件回 index.html —— 报出来的是
+// "'text/html' is not a valid JavaScript MIME type"，从字面完全看不出是文件不存在。
+ort.env.wasm.wasmPaths = new URL('./lib/', import.meta.url).href;
+ort.env.wasm.numThreads = 1;      // 单线程：不依赖 SharedArrayBuffer / 跨源隔离
+const session = await ort.InferenceSession.create('./assets/velstand.onnx',
+  { executionProviders: ['wasm'] });
+const ortIn = session.inputNames[0], ortOut = session.outputNames[0];
+
+const obs = new Float32Array(OBS_SIZE);
+const lastAction = new Float32Array(NUM_JOINTS);
+const cmd = new Float32Array(CMD_SIZE);     // 全零 = 站着别动
+let uprightness = 0;                        // 末态拿它判直立（-1 是站直）
+
+// 61 维观测，顺序和 infer_policy.py 的 get_observations 一致：
+//   角速度(3) 投影重力(3) 关节位置(14) 关节速度(14) 上一步动作(14) 指令(13)
+function buildObs() {
+  const qp = data.qpos, qv = data.qvel, sens = data.sensordata;
+  let i = 0;
+  for (let a = 0; a < 3; a++) obs[i++] = sens[adr.gyroAdr + a];
+
+  // 投影重力：把世界 -Z 用躯干四元数的**共轭**转进机身系（= 机身系里"下"的方向）。
+  // 只用到旋转矩阵的第三列，所以不用把整个矩阵写出来。
+  const xq = data.body(adr.trunkId).xquat;                 // [w,x,y,z]
+  const w = xq[0], x = -xq[1], y = -xq[2], z = -xq[3];     // 共轭
+  uprightness = -(1 - 2 * (x * x + y * y));
+  obs[i++] = -(2 * (x * z + w * y));
+  obs[i++] = -(2 * (y * z - w * x));
+  obs[i++] = uprightness;
+
+  for (let j = 0; j < NUM_JOINTS; j++) obs[i++] = qp[adr.qposAdr[j]] - DEFAULT_POSE[j];
+  for (let j = 0; j < NUM_JOINTS; j++) obs[i++] = qv[adr.dofAdr[j]];
+  for (let j = 0; j < NUM_JOINTS; j++) obs[i++] = lastAction[j];
+  for (let j = 0; j < CMD_SIZE; j++) obs[i++] = cmd[j];
+  return obs;
+}
+
+// 一个控制步：推理 → 写执行器 → 推 4 个物理步。
+// 动作是**位置目标相对 DEFAULT_POSE 的偏移**，直接喂给 MJCF 里的 <position> 执行器。
+async function controlStep() {
+  const out = await session.run({ [ortIn]: new ort.Tensor('float32', buildObs(), [1, OBS_SIZE]) });
+  const act = out[ortOut].data;
+  for (let j = 0; j < NUM_JOINTS; j++) {
+    if (!Number.isFinite(act[j])) return;     // 宁可这一拍不动，也别把 NaN 灌进物理
+    lastAction[j] = act[j];
+    data.ctrl[j] = DEFAULT_POSE[j] + act[j];
+  }
+  for (let s = 0; s < DECIMATION; s++) mj.mj_step(model, data);
+}
+
+// ── 渲染 ─────────────────────────────────────────────────────────────────────
+// 用 MuJoCo 的**世界变换**直接摆每一块（body 的 xpos/xquat 就是世界位姿），
+// 不自己做正运动学、也不按 kinematics 的父子关系建树。
+// 这样渲染和物理不可能漂 —— 摆的就是 MuJoCo 刚算出来的那一份。
+const THREE = await import('three');
+const { GLTFLoader } = await import('./lib/three/addons/GLTFLoader.js');
+
+const kinematics = await (await fetch('./robot/kinematics.json')).json();
+const gltf = await new GLTFLoader().loadAsync('./robot/microduck.glb');
+
+// GLTFLoader 会过一遍 PropertyBinding.sanitizeNodeName()，它把 [ ] . : / 从名字里**删掉**，
+// 于是 "ankle_left.stl" 到了这边就成了 "ankle_leftstl"。两边用同一条规则当键。
+const san = (s) => String(s).replace(/\s/g, '_').replace(/[\[\]\.:\/]/g, '');
+const geomsByName = new Map();
+gltf.scene.traverse(o => {
+  if (!o.isMesh) return;
+  if (o.name) geomsByName.set(san(o.name), o.geometry);
+  if (o.parent && o.parent.name) geomsByName.set(san(o.parent.name), o.geometry);
+});
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0b0f14);
+
+// MJCF 是 z 朝上，three.js 默认 y 朝上。这里不动数据、也不转场景，直接把相机的
+// up 设成 z —— 屏幕上的坐标和 MJCF 一一对应，对照调试时少绕一层。
+const camera = new THREE.PerspectiveCamera(38, innerWidth / innerHeight, 0.01, 20);
+camera.up.set(0, 0, 1);
+
+// preserveDrawingBuffer：只有排障要读回画面时才开（不然缓冲已被清掉，采到永远是黑）。
+// 平时关着，省一次拷贝。
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: TELEMETRY });
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.0;
+document.body.appendChild(renderer.domElement);
+
+scene.add(new THREE.HemisphereLight(0xbcd4ff, 0x2a2620, 1.1));
+const key = new THREE.DirectionalLight(0xffffff, 2.2);
+key.position.set(0.6, 0.9, 1.4);
+key.castShadow = true;
+key.shadow.mapSize.set(1024, 1024);
+const sc = key.shadow.camera;
+sc.left = -0.6; sc.right = 0.6; sc.top = 0.6; sc.bottom = -0.6; sc.near = 0.1; sc.far = 4;
+scene.add(key);
+const rim = new THREE.DirectionalLight(0xffe9c9, 0.9);
+rim.position.set(-0.8, -0.5, 0.7);
+scene.add(rim);
+
+// 地面：只为让阴影落得下来。故意做得比鸭子大不少，走出去也不会掉出地面。
+const floor = new THREE.Mesh(
+  new THREE.PlaneGeometry(8, 8),
+  new THREE.MeshStandardMaterial({ color: 0x1a2632, roughness: 0.95, metalness: 0 }));
+floor.receiveShadow = true;
+scene.add(floor);
+
+// 每个 body 一个 Group，平铺挂在 scene 下；geom 按它在自己 body 系里的位姿挂进去。
+const bodyGroups = new Map();
+let meshCount = 0;
+for (const b of kinematics.bodies) {
+  const g = new THREE.Group();
+  scene.add(g);
+  bodyGroups.set(b.name, g);
+  for (const geom of b.geoms) {
+    const geo = geomsByName.get(san(geom.mesh));
+    if (!geo) continue;
+    const c = geom.color || [1, 1, 1, 1];
+    const mat = new THREE.MeshStandardMaterial({
+      color: new THREE.Color(c[0], c[1], c[2]),
+      roughness: 0.45, metalness: 0,
+    });
+    const m = new THREE.Mesh(geo, mat);
+    m.castShadow = true; m.receiveShadow = true;
+    m.position.fromArray(geom.pos);
+    // MJCF 的四元数是 w 在前，three.js 是 (x,y,z,w)
+    m.quaternion.set(geom.quat[1], geom.quat[2], geom.quat[3], geom.quat[0]);
+    g.add(m);
+    meshCount++;
+  }
+}
+const bodyIds = new Map();
+for (const b of kinematics.bodies) {
+  bodyIds.set(b.name, mj.mj_name2id(model, mj.mjtObj.mjOBJ_BODY.value, b.name));
+}
+if (ONLY) for (const [name, g] of bodyGroups) g.visible = (name === ONLY);
+
+function syncBodies() {
+  for (const [name, g] of bodyGroups) {
+    const bid = bodyIds.get(name);
+    g.position.set(data.xpos[bid * 3], data.xpos[bid * 3 + 1], data.xpos[bid * 3 + 2]);
+    g.quaternion.set(data.xquat[bid * 4 + 1], data.xquat[bid * 4 + 2],
+                     data.xquat[bid * 4 + 3], data.xquat[bid * 4]);
+  }
+}
+
+// 侧后方跟拍：能看清腿的摆动。镜头只平移不转向，和手机那边一个思路。
+const camTarget = new THREE.Vector3();
+function followCam(instant) {
+  const bx = data.xpos[adr.trunkId * 3], by = data.xpos[adr.trunkId * 3 + 1];
+  const bz = data.xpos[adr.trunkId * 3 + 2];
+  camTarget.set(bx - 0.42, by - 0.50, bz + 0.20);
+  camera.position.lerp(camTarget, instant ? 1 : 0.06);
+  camera.lookAt(bx, by, bz - 0.02);
+  key.target.position.set(bx, by, bz);
+  key.target.updateMatrixWorld();
+}
+
+// ── 主循环 ───────────────────────────────────────────────────────────────────
+// 按**实时**推进：仿真时间 1:1 跟墙钟。纯算力上能跑到 100 倍实时（10 秒仿真
+// 0.1 秒跑完），但那是测试用的；看的时候得按实时，动作才自然。
+let simT = 0, acc = 0, last = performance.now(), frames = 0, fpsT = last;
+let nextShot = 3;      // 排障抓帧用：第 3 秒起每 6 秒传一张画面出去
+const WALK_VX = 0.4;      // velstand 烘步态时用的同一个指令速度
+cmd[0] = WALK_VX;
+
+if (STATIC) { mj.mj_resetData(model, data); mj.mj_forward(model, data); }
+
+let busy = false;
+async function tick() {
+  requestAnimationFrame(tick);
+  const now = performance.now();
+  acc += Math.min(100, now - last) / 1000;   // 单帧 dt 掐在 100 ms 内，挂起回来别瞬移
+  last = now;
+
+  if (busy) return;                          // 推理是异步的，别重入
+  let n = 0;
+  while (acc >= CTRL_DT && n < 8) {
+    busy = true;
+    await controlStep();
+    busy = false;
+    acc -= CTRL_DT; simT += CTRL_DT; n++;
+  }
+  if (acc > CTRL_DT * 8) acc = 0;
+
+  syncBodies();
+  followCam(n === 0);
+  renderer.render(scene, camera);
+
+  frames++;
+  if (now - fpsT > 500) {
+    const fps = Math.round(frames * 1000 / (now - fpsT));
+    const line =
+      `仿真 ${simT.toFixed(1)}s   ${fps} fps\n` +
+      `指令 vx=${cmd[0].toFixed(2)}   直立度 ${uprightness.toFixed(3)}\n` +
+      `位置 x=${data.qpos[0].toFixed(3)} y=${data.qpos[1].toFixed(3)} z=${data.qpos[2].toFixed(3)}`;
+    hud.textContent = line;
+    tel(`t=${simT.toFixed(1)}s fps=${fps} up=${uprightness.toFixed(3)} ` +
+        `x=${data.qpos[0].toFixed(3)} y=${data.qpos[1].toFixed(3)}`);
+    if (TELEMETRY && simT >= nextShot) { nextShot = simT + 6; telShot(`t${simT | 0}`); }
+    frames = 0; fpsT = now;
+  }
+}
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+// 桌面没有触摸屏，手机那套"按住说话"在这儿没有对应物。这一版先只做运动。
+addEventListener('keydown', (e) => {
+  if (e.key === ' ')        { cmd[0] = cmd[0] === 0 ? WALK_VX : 0; e.preventDefault(); }
+  if (e.key === 'ArrowUp')  { cmd[0] = Math.min(1.0, cmd[0] + 0.2); e.preventDefault(); }
+  if (e.key === 'ArrowDown'){ cmd[0] = Math.max(0.0, cmd[0] - 0.2); e.preventDefault(); }
+});
+
+errEl.textContent = '';
+hud.textContent = `${kinematics.bodies.length} body / ${meshCount} mesh`;
+tick();

@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "identifier": "com.fanduck.agent",
   "build": {
-    "frontendDist": "../../app/src/main/assets/duck"
+    "frontendDist": "../web"
   },
   "app": {
     "windows": [],

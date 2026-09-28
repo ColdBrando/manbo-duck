@@ -5,3 +5,11 @@ src-tauri/target/
 
 # Tauri 构建时生成的权限 schema，跟着 target 一起重生
 src-tauri/gen/
+
+# ---- 以下是 scripts/prepare.mjs 生成的东西，不进版本库 ----
+# 理由：要么能从 node_modules 拷（几十 MB 的 wasm），
+# 要么能从 microduck_rl 现场生成（20 MB 网格 + 7 MB GLB），
+# 要么能从 HuggingFace 下（策略）。提交进来只会变成一份会漂的副本。
+web/lib/
+web/robot/
+web/assets/

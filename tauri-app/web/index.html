@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>duck</title>
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; background: #0b0f14; overflow: hidden; }
+  canvas { display: block; }
+  #hud {
+    position: fixed; left: 12px; top: 12px; pointer-events: none;
+    color: #9fb0c0; background: #0b0f14cc; padding: 8px 12px; border-radius: 6px;
+    font: 12px/1.5 ui-monospace, Menlo, monospace; white-space: pre;
+  }
+  #err {
+    position: fixed; left: 12px; bottom: 12px; right: 12px;
+    color: #ff7b72; font: 12px/1.5 ui-monospace, Menlo, monospace; white-space: pre-wrap;
+  }
+</style>
+<!-- three.js 的 ESM 版要 import map；另外两个（MuJoCo / onnxruntime）是动态 import，
+     不需要映射。这几个文件都由 scripts/prepare.mjs 从 node_modules 拷进来。 -->
+<script type="importmap">
+{ "imports": { "three": "./lib/three/three.module.js" } }
+</script>
+</head>
+<body>
+<div id="hud">加载中…</div>
+<div id="err"></div>
+<script type="module" src="./app.js"></script>
+</body>
+</html>

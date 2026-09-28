@@ -1,141 +1,139 @@
 # duck 桌面壳（Tauri）
 
-把 Android 那边 `app/src/main/assets/duck/` 那套页面**原样**装进一个桌面窗口。
-一只站在屏幕上的鸭子，和手机上那只长得一模一样 —— 因为它就是同一份文件。
+屏幕上的鸭子，在桌面上**实时跑真机策略**：MuJoCo 编译成 WebAssembly 算物理，
+onnxruntime-web 跑 `velstand.onnx`，three.js 画。50 Hz 闭环，和真机 runtime 同一套约定。
 
-现在做两件事：**能看见**（窗口开起来、鸭子渲染出来、拖动窗口画面跟着重排）和
-**会走**（播真机策略烘出来的步态，方向键驱动）。没有语音、没有云端、没有 agent 循环，
-那些还在 Android 那边。
-
-## 键盘
-
-| 键 | 干什么 |
-|---|---|
-| `↑` / `W` | 往前走（0.4 m/s） |
-| `↓` / `S` | 往后退 |
-| `←` / `A` | 左转（原地，1.0 rad/s） |
-| `→` / `D` | 右转 |
-| `空格` | 停（把所有按键放掉） |
-
-窗口失焦会把按键全放掉，不会"卡着一直走"。
-
-注意**转身的时候腿是不走的**：素材里只有一段"前进"的片段，`pickClip` 按方向挑，
-纯转身（vx=0）配不上它，所以鸭子原地转、腿保持站姿。这和 Android 那边
-`GaitPack.forCommand` 的行为一致 —— 要"边走边转"就得再录一段带 `wz` 的素材。
+它**不是**手机的移植版 —— 手机那套是"离线烘好关节角、前端放动画"，见下面「两条路」。
 
 ## 跑起来
 
 ```bash
-npm install          # 只装 @tauri-apps/cli
-npm run dev          # 开发模式，改 Rust 会自己重编
-npm run build        # 出 .app / .dmg（macOS），产物在 src-tauri/target/release/bundle/
+npm install       # 三个依赖：@mujoco/mujoco / onnxruntime-web / three
+npm run setup     # 把资源准备好（见下），一次就够
+npm run dev       # 起窗口
+npm run build     # 出 .app / .dmg，产物在 src-tauri/target/release/bundle/
 ```
 
-前置：Rust 工具链（`rustc` / `cargo`）+ Xcode Command Line Tools。本机装 Rust 时直连
-`static.rust-lang.org` 会断，走的是清华镜像：
+`npm run setup` 做三件事，产物都在 `web/` 下且**不进版本库**：
 
-```bash
-RUSTUP_DIST_SERVER=https://mirrors.tuna.tsinghua.edu.cn/rustup \
-  rustup toolchain install stable --profile minimal
-```
+| 产物 | 从哪来 | 为什么不提交 |
+|---|---|---|
+| `web/lib/` | 从 `node_modules` 拷（MuJoCo 10 MB + onnxruntime 14 MB 的 wasm + three） | 几十 MB，且 `npm install` 就有了 |
+| `web/robot/` | 从 `microduck_rl` 拷 MJCF + 38 个 STL，再跑 `tools/mjcfkin/mjcf_to_kinematics.py` 生成 `kinematics.json` + `microduck.glb` | 能现场生成，提交进来就是一份会漂的副本 |
+| `web/assets/` | 从 HuggingFace 下 `velstand.onnx`（775 KB） | 同上 |
 
-## 目录
+两个前提：
+
+- **`microduck_rl` 检出在隔壁**（默认 `../../microduck_rl`，用 `MICRODUCK_RL` 覆盖）
+- **一个能 `import mujoco` 和 `trimesh` 的 Python**（默认 `/tmp/duckrl/bin/python`，用 `DUCK_PY` 覆盖）：
+  ```bash
+  uv venv /tmp/duckrl --python 3.12
+  uv pip install --python /tmp/duckrl/bin/python mujoco trimesh
+  ```
+
+## 两条路
+
+同一个"屏幕鸭子"，桌面和手机走的是**两条不同的路**：
+
+| | 手机（`app/`） | 桌面（这里） |
+|---|---|---|
+| 动作怎么来 | `tools/duckgait/bake_gait.py` 离线录一段周期步态 → `gaits.json` → 放动画 | **策略实时推理**，50 Hz |
+| 物理 | 没有 | **MuJoCo 在算** —— 会摔、会碰 |
+| 能做什么 | 只有周期步态（走、转） | 全部技能（翻滚、踢球、坐站、轮滑…） |
+| 资源 | 共用 `app/src/main/assets/duck/` | 自带一套 20 MB 模型 + 两个 WASM 运行时 |
+| 前端 | `duck.js` | 这里的 `web/app.js` |
+
+**为什么换**：烘步态那条路试过，卡在两点 —— 一是 `gaits.json` 那套格式只装得下周periodic
+的步态，前滚翻/踢球这种一次性动作装不下；二是策略跟训练环境绑得很死，从 HuggingFace
+下一个社区策略（`HannesVonEssen/microduck-running`）在官方 harness 里**全速度都跑不起来**，
+只有官方那个 `velstand` 能用。实时跑策略没有这两个问题。
+
+代价是桌面和手机不再共用前端 —— 这是换路线的固有成本，不是没做好。
+
+## 结构
 
 ```
 tauri-app/
-  package.json          只有 @tauri-apps/cli 一个依赖，没有前端框架、没有打包器
+  package.json          三个依赖，没有前端框架、没有打包器
+  scripts/prepare.mjs   准备资源（上面那张表）
+  tools/telemetry.py    排障用：页面把状态和画面 POST 出来
+  web/                  ← frontendDist 指这里
+    index.html          只有 import map 和一个 canvas
+    app.js              全部逻辑：物理 / 策略 / 渲染 / 输入
+    lib/ robot/ assets/ 生成物，gitignore
   src-tauri/
-    Cargo.toml
-    tauri.conf.json     frontendDist 指到 Android 的 assets，见下
-    capabilities/       窗口权限（这一版是纯静态加载，只要 core:default）
-    icons/              由 `npx tauri icon` 生成
-    src/lib.rs          开窗口 + 注入一段 resize 脚本，全部逻辑就这些
-    src/main.rs         仅调用 lib.rs
+    src/lib.rs          只开窗口，没有别的逻辑
+    tauri.conf.json     frontendDist: "../web"
 ```
 
-**没有 `dist/`，也没有 `index.html`** —— 前端资源不在这个目录里。
+## 关键约定（别改错）
 
-## 为什么不复制一份 assets
+全部对齐真机 runtime，改任何一处都会让鸭子的行为和真机不一致：
 
-`tauri.conf.json` 里：
+- **观测 61 维**：角速度(3) + 投影重力(3) + 关节位置(14) + 关节速度(14) + 上一步动作(14) + 指令(13)
+  （3+3+14+14+14+13 = 61）。顺序和 `microduck_rl/scripts/infer_policy.py` 的 `get_observations` 一致。
+- **动作 14 维**：是**位置目标相对 `DEFAULT_POSE` 的偏移**，直接写进 `data.ctrl`。
+- **50 Hz 控制**：物理步长 0.005 s，每 4 步推理一次（`DECIMATION = 4`）。
+- **坐标**：全程用 MJCF 的约定（z 朝上、米）。three.js 那边靠 `camera.up.set(0,0,1)` 适配，
+  **不转场景也不转数据** —— 这样屏幕上的坐标和 MJCF 一一对应，对照调试少绕一层。
+- **渲染用 MuJoCo 的世界变换**（`data.xpos` / `data.xquat`）直接摆每一块，不自己算正运动学。
+  渲染和物理因此不可能漂。
 
-```json
-"build": { "frontendDist": "../../app/src/main/assets/duck" }
-```
+## 踩过的坑
 
-路径相对于 `src-tauri/`，所以指回的是 Android 那份 assets。Tauri 在这一点上就是个
-**静态 Web 宿主**：给它一个目录，它用系统 WebView 渲染里面的 `index.html`，
-和 Android 那边 `WebView` 干的是同一件事。
+1. **GLB 的顶点必须取自 `model.mesh_vert`，不能读原始 STL。**
+   MuJoCo 编译时会改写 STL 顶点（实测 `trunk_base.stl` 的 X/Z 被对调），而 `geom_pos/geom_quat`
+   是编译后的值。拿编译后的变换配原始顶点 —— 每个零件的位置朝向都对、**自身形状却是错的**，
+   表现是整只鸭子"散架"。而且逐项验证（body 位姿 ✓ geom 位置 ✓ geom 四元数 ✓ 包围盒 ✓）
+   **全都能通过**，极难定位。见 `tools/mjcfkin/mjcf_to_kinematics.py` 顶部注释。
 
-这么接的收益是 `duck.js` / `duck-meshes.js`（2.6 MB 的生成文件）全项目只有一份，
-改完手机和桌面同时生效，不会出现"手机上是新的、桌面还是旧的"。代价是
-`tauri-app/` 不能单独拷走 —— 它对 `../app/` 有依赖。
+2. **颜色取 `mat_rgba`，不是 `geom_rgba`。** geom 挂了 `material="xxx"` 时，
+   `geom_rgba` 只是占位（实测全是 0.5,0.5,0.5）。
 
-顺带一提，`duck.js` 里那句"three.min.js 必须在 assets 里：离线手机打不开 CDN"、
-以及用 `<script>` 标签而不是 `fetch` 取 base64（躲 WebView 的 file:// CORS），
-在 Tauri 这边同样成立 —— 这些为 WebView 做的判断，桌面壳不用改一行。
+3. **`GLTFLoader` 会改名。** 它过一遍 `PropertyBinding.sanitizeNodeName()`，把 `[ ] . : /`
+   从名字里**删掉** —— `ankle_left.stl` 到了 JS 侧成了 `ankle_leftstl`。两边得用同一条
+   规范化规则当键（`app.js` 里的 `san()`）。
 
-## 唯一一处"不是原样"：resize
+4. **onnxruntime 要用 wasm-only 的构建**（`ort.wasm.min.mjs`）。默认那个带 WebGPU 后端，
+   会先去要 `jsep` 变体；文件不存在时 **Tauri 的 dev server 回 `index.html`**，于是报
+   `'text/html' is not a valid JavaScript MIME type` —— 从字面完全看不出是"文件不存在"。
+   定位办法是逐个 `fetch` 比对 `content-type` 和**字节数**（对上 `index.html` 的大小就露馅了）。
+   `executionProviders: ['wasm']` **拦不住**它。
 
-窗口是建在 Rust 里（`src/lib.rs`）而不是写在 `tauri.conf.json` 的 `app.windows` 里，
-就为了能挂一段 `initialization_script`：
+5. **Tauri dev 会监视 `frontendDist` 目录**，往里面写任何文件都会触发页面重载。
+   踩过：telemetry 日志写在 `web/` 里 → 每写一条日志就重载一次 → 无限循环 → 全黑跑不起来。
+   所以 `tools/telemetry.py` 的日志落在 `/tmp`。
 
-```js
-window.addEventListener('resize', () => window.duck.resize());
-```
+6. **不要用全屏 `screencapture` 看画面**，会抓进用户屏幕上正在做的别的事。
+   走 `tools/telemetry.py`：页面把诊断和画面 POST 出来，窗口被遮住也拿得到。
 
-原因：`duck.js` 只在**解析时**调一次 `renderer.setSize(window.innerWidth, ...)`，
-WebGL canvas 的尺寸是那一次写死的，之后窗口被拖动它不会跟着变 —— 画面停在旧尺寸、
-周围留一圈黑边。Android 那边靠 `DuckView` 在页面加载后调一次 `window.duck.resize()`
-解决（见 `duck.js` 里"规格里没有这个函数"那条注释）；桌面窗口能随时拖，
-所以这里挂到 resize 事件上。
+## 排障开关
 
-写成**注入脚本**是为了不动 assets 里任何一个文件。
+`web/app.js` 顶部三个常量，平时都是 false：
 
-两个注意点，都踩过：
+| 开关 | 干什么 |
+|---|---|
+| `STATIC` | 冻在 qpos0 不跑策略，用来和 MuJoCo 原生渲染逐帧对照 |
+| `ONLY` | 只显示一个 body，用来把装配问题缩到单个 body 上 |
+| `TELEMETRY` | 把状态和画面 POST 给 `tools/telemetry.py`（先跑起来再开） |
 
-1. 必须写 `window.duck` 而不是 `duck`。`duck.js` 顶层有 `const duck = new THREE.Group()`，
-   它在全局词法环境里遮蔽了 `window.duck`（`doc/gotchas.md` 第 1 条）。
-2. 初始化脚本在页面脚本**之前**执行，那时 `window.duck` 还不存在，所以判空、且只在事件里调。
+## License
 
-## 步态播放器
+代码从 `microduck_rl`（**Apache-2.0**）移植。
 
-`src-tauri/src/gait-player.js`（`include_str!` 编译进二进制，和 resize 脚本拼成同一段
-初始化脚本注入）。它读 `app/src/main/assets/duck/gaits.json` —— 就是 Android 那边
-`Gait.kt` 读的同一份文件 —— 按指令积分出地面位置，取片段的一帧摊到 15 个关节角上，
-30 fps 推给 `window.duck.setFrame(...)`。
+**没有**参考官方那个 HF Space（`pollen-robotics/microduck-simulator`）的应用代码 ——
+它的 README 抄了几个数字（常量、观测布局），但那份仓库**没声明 license**（默认保留所有权利），
+所以实现是照 Apache-2.0 的 `infer_policy.py` 和 MJCF 自己写的。
 
-**素材归 Android 那条线**：`gaits.json` 由 `tools/duckgait/bake_gait.py` 从真机策略
-（`microduck-policies` 的 `velstand.onnx`）在 MuJoCo 里录的轨迹烘出来。桌面这边**只读**，
-不生成也不改写 —— 所以手机和桌面上鸭子走的永远是同一套步态。
-
-### 和 `DuckMotion.kt` 的差异（有意为之）
-
-1. **没有实现手写步态兜底**（膝盖摆动 / 踏步 / 前倾）。那部分是给"没有素材"兜底的，
-   而真机的 `velstand` 策略在低于 `WALK_CLIP_MIN`(0.3 m/s) 时本来就选择站着 ——
-   所以这里低于门槛就站着呼吸，反而和真机行为一致。也避免把另一个会话正在改的 Kotlin
-   逻辑抄第二遍、两边各自漂移。
-2. **命令速度定死在 0.4 m/s**（`WALK_SPEED`）。烘出来的那段 clip 就是 0.4 m/s 录的，
-   步频是那段录制的固有属性；命令成别的速度、腿还按 0.4 的频率倒，就会"滑行"——
-   正是这个项目反复修掉的那个观感。**想要更快（"跑"）得按更高指令再录一段烘进来**，
-   不是在播放器里加速度。
-3. **稳在 30 fps**（累加器步进）。不只是省 CPU：`duck.js` 的相机软跟随是**按帧**追
-   `CAM_LAG` 6%，60 fps 下时间常数会短一半，观感就和手机上不是同一只鸭子了。
-
-匹配的部分：`ACCEL_TAU` / `WALK_CLIP_MIN` / `CLIP_FADE_S` / `BREATH_HZ` / `BREATH_NECK`
-和 `STAND` 基准姿态都对着 `DuckMotion.kt` 抄，位置积分（平滑后速度 × dt，yaw 参与
-x/z 的分解）和素材混合（`frameAt` 插值 + `clipWeight` 淡入淡出 + 跳过下标 9 的嘴）
-对着 `sample()` 和 `GaitClip` 抄。
+网格模型的许可见 `app/src/main/assets/duck/duck-meshes.LICENSE.txt`（CC BY-SA-NC）。
 
 ## 现在还没做
 
 | | 状态 |
 |---|---|
-| 鸭子渲染 + 窗口 resize | ✅ |
-| 播真机步态 + 键盘驱动 | ✅ 只有 `walk` 一段（0.4 m/s），转身/后退没有对应素材 |
-| 机位切换（`window.duck.setView(0..7)`） | 只在 devtools 里手敲，没有 UI |
-| 更多动作（跑 / 转身 / 前滚翻 / 踢球…） | ❌ 素材侧的事：`gaits.json` 现在的格式是"切一个周期循环播"，装得下周periodic 的步态，装不下前滚翻这种一次性动作，要另设格式 |
-| 把它连上 agent（收语音 / TTS） | ❌ 下一步。`capabilities/default.json` 里的权限那时候要往上加 |
-| Windows / Linux 构建 | 没试过，配置里没写死 macOS 的东西 |
-
-桌面上没有触摸屏，"按住说话"那个交互要重新想一个（快捷键？点一下开始点一下停？）。
+| 站立 / 走路 | ✅ 与官方 harness 的实测速度一致（0.157 vs 0.17 m/s） |
+| 渲染 | ✅ 装配正确、颜色正确、实时 |
+| 画质（环境贴图 / 真阴影 / 色调映射） | ⚠️ 有基础阴影和 ACES，但材质还没有环境贴图 —— 塑料感不足 |
+| 更多动作（跑 / 翻身 / 踢球…） | ❌ 换策略文件即可，`web/assets/` 里放哪个跑哪个 |
+| 转身 / 后退指令 | ❌ `velstand` 不支持（原地转没有周期性，实测过），要另找策略 |
+| 接语音（按住说话之类） | ❌ 桌面没有触摸屏，交互要重新想 |

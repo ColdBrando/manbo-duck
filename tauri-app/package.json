@@ -2,11 +2,18 @@
   "name": "duck-tauri",
   "private": true,
   "version": "0.1.0",
-  "description": "屏幕鸭子的桌面壳：把 app/src/main/assets/duck/ 原样装进一个 Tauri 窗口",
+  "type": "module",
+  "description": "屏幕鸭子的桌面壳：MuJoCo(WASM) 跑物理、ONNX 跑策略、three.js 画",
   "scripts": {
+    "setup": "node scripts/prepare.mjs",
     "dev": "tauri dev",
     "build": "tauri build",
     "tauri": "tauri"
+  },
+  "dependencies": {
+    "@mujoco/mujoco": "^3.13.0",
+    "onnxruntime-web": "^1.30.0",
+    "three": "^0.186.1"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2"
