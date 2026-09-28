@@ -287,14 +287,24 @@ function materialFor(geom) {
   const c = geom.color || [1, 1, 1, 1];
   const n = (geom.mat || '').toLowerCase();
   let roughness = 0.5, metalness = 0.05;          // 默认：中灰尼龙结构件
+  let shell = false;
   if (/shell|foot_|ankle_|sole_|jaw|noenoeil/.test(n)) {
-    roughness = 0.28; metalness = 0.0;            // 光面注塑外壳：高光要锐
+    roughness = 0.28; metalness = 0.0; shell = true;   // 光面注塑外壳：高光要锐
   } else if (/soft|mouth/.test(n)) {
     roughness = 0.8; metalness = 0.0;             // 软胶：几乎不反光
   } else if (/pcb|elec_/.test(n)) {
     roughness = 0.62; metalness = 0.1;            // 电路板：哑光
   } else if (/trunk_base|yaw|bearing|motor_support|xl330|np_f970|neck_pitch|lens|speaker/.test(n)) {
     roughness = 0.4; metalness = 0.45;            // 深色结构件 / 舵机：带金属感
+  }
+  // 光面外壳用 MeshPhysicalMaterial 加一层清漆：真实的注塑亮件外面有一层透明漆，
+  // 反射主要发生在漆面上（而不是底材），这是"像塑料"和"像石膏"的分界。
+  if (shell) {
+    return new THREE.MeshPhysicalMaterial({
+      color: new THREE.Color(c[0], c[1], c[2]),
+      roughness, metalness,
+      clearcoat: 0.55, clearcoatRoughness: 0.12,
+    });
   }
   return new THREE.MeshStandardMaterial({
     color: new THREE.Color(c[0], c[1], c[2]),
