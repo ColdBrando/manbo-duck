@@ -228,15 +228,32 @@ function syncBodies() {
   }
 }
 
-// 侧后方跟拍：能看清腿的摆动。镜头只平移不转向，和手机那边一个思路。
-const camTarget = new THREE.Vector3();
+// 跟拍机位，用**球坐标**存 —— 这样右键才能环绕、滚轮才能推拉。
+// 初始角度就是原来那个"侧后方"固定偏移 (-0.42, -0.50, 0.20) 换算来的：
+// azim = atan2(-0.50, -0.42) = -130°，elev = asin(0.20/0.683) = 17°，dist = 0.683。
+// 所以默认观感和改之前一模一样。
+//
+// 镜头只平移不转向（朝向始终对着鸭子），所以鸭子转头/转身都看得见。
+let camAzim = -130 * Math.PI / 180;
+let camElev = 17 * Math.PI / 180;
+let camDist = 0.683;
+const camFocus = new THREE.Vector3();
+let camReady = false;
+
 function followCam(instant) {
   const bx = data.xpos[adr.trunkId * 3], by = data.xpos[adr.trunkId * 3 + 1];
   const bz = data.xpos[adr.trunkId * 3 + 2];
-  camTarget.set(bx - 0.42, by - 0.50, bz + 0.20);
-  camera.position.lerp(camTarget, instant ? 1 : 0.06);
-  camera.lookAt(bx, by, bz - 0.02);
-  key.target.position.set(bx, by, bz);
+  // 只有"焦点"平滑地追鸭子，角度是直接用的 —— 拖右键时手感要跟手，不能再插值
+  if (!camReady || instant) { camFocus.set(bx, by, bz); camReady = true; }
+  else camFocus.lerp(new THREE.Vector3(bx, by, bz), 0.12);
+
+  const ce = Math.cos(camElev);
+  camera.position.set(
+    camFocus.x + camDist * ce * Math.cos(camAzim),
+    camFocus.y + camDist * ce * Math.sin(camAzim),
+    camFocus.z + camDist * Math.sin(camElev));
+  camera.lookAt(camFocus.x, camFocus.y, camFocus.z - 0.02);
+  key.target.position.copy(camFocus);
   key.target.updateMatrixWorld();
 }
 
@@ -258,6 +275,7 @@ async function tick() {
   last = now;
 
   if (busy) return;                          // 推理是异步的，别重入
+  applyYawInput();                           // 要在控制步之前：指令得进这一拍的观测
   let n = 0;
   while (acc >= CTRL_DT && n < 8) {
     busy = true;
@@ -276,8 +294,9 @@ async function tick() {
     const fps = Math.round(frames * 1000 / (now - fpsT));
     const line =
       `仿真 ${simT.toFixed(1)}s   ${fps} fps\n` +
-      `指令 vx=${cmd[0].toFixed(2)}   直立度 ${uprightness.toFixed(3)}\n` +
-      `位置 x=${data.qpos[0].toFixed(3)} y=${data.qpos[1].toFixed(3)} z=${data.qpos[2].toFixed(3)}`;
+      `指令 vx=${cmd[0].toFixed(2)} wz=${cmd[2].toFixed(2)}   直立度 ${uprightness.toFixed(3)}\n` +
+      `位置 x=${data.qpos[0].toFixed(3)} y=${data.qpos[1].toFixed(3)} z=${data.qpos[2].toFixed(3)}\n` +
+      `左键拖=转鸭子   右键拖=转镜头   滚轮=远近   空格=走/停   ↑↓=速度`;
     hud.textContent = line;
     tel(`t=${simT.toFixed(1)}s fps=${fps} up=${uprightness.toFixed(3)} ` +
         `x=${data.qpos[0].toFixed(3)} y=${data.qpos[1].toFixed(3)}`);
@@ -292,12 +311,60 @@ addEventListener('resize', () => {
   renderer.setSize(innerWidth, innerHeight);
 });
 
-// 桌面没有触摸屏，手机那套"按住说话"在这儿没有对应物。这一版先只做运动。
+// ── 输入 ─────────────────────────────────────────────────────────────────────
+// 桌面没有触摸屏，手机那套"按住说话"在这儿没有对应物。这一版只做运动和视角。
 addEventListener('keydown', (e) => {
   if (e.key === ' ')        { cmd[0] = cmd[0] === 0 ? WALK_VX : 0; e.preventDefault(); }
   if (e.key === 'ArrowUp')  { cmd[0] = Math.min(1.0, cmd[0] + 0.2); e.preventDefault(); }
   if (e.key === 'ArrowDown'){ cmd[0] = Math.max(0.0, cmd[0] - 0.2); e.preventDefault(); }
 });
+
+const canvas = renderer.domElement;
+// 右键要用来环绕镜头，别弹系统菜单
+canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+
+let dragBtn = -1;          // 0 = 左键（转鸭子），2 = 右键（转镜头）
+let lastX = 0, lastY = 0;
+let yawImpulse = 0;        // 左键拖拽累积的转向量，每帧衰减
+
+canvas.addEventListener('mousedown', (e) => {
+  if (e.button !== 0 && e.button !== 2) return;
+  dragBtn = e.button; lastX = e.clientX; lastY = e.clientY;
+  e.preventDefault();
+});
+
+addEventListener('mouseup', () => { dragBtn = -1; });
+
+addEventListener('mousemove', (e) => {
+  if (dragBtn < 0) return;
+  const dx = e.clientX - lastX, dy = e.clientY - lastY;
+  lastX = e.clientX; lastY = e.clientY;
+
+  if (dragBtn === 2) {
+    // 右键：环绕镜头。往右拖 = 镜头绕到鸭子右边，和大多数 3D 软件一致。
+    camAzim -= dx * 0.008;
+    camElev = Math.max(-1.3, Math.min(1.3, camElev + dy * 0.006));
+  } else {
+    // 左键：转鸭子。**不是直接改朝向**，而是转成偏航角速度指令交给策略
+    // （cmd[2]）—— 真机就是这么转的，我们实测过 vx=0.3/wz=1.0 时策略能边走边转。
+    // 累积 + 每帧衰减：拖着就转，手停下来就慢慢不转，像游戏里的鼠标转向。
+    yawImpulse -= dx * 0.010;
+  }
+});
+
+// 滚轮推拉镜头
+canvas.addEventListener('wheel', (e) => {
+  camDist = Math.max(0.25, Math.min(2.5, camDist * (1 + e.deltaY * 0.0012)));
+  e.preventDefault();
+}, { passive: false });
+
+// 每帧把累积的拖拽量转成偏航指令。衰减系数决定"松手后还转多久"，
+// 0.82 大约半秒收住。
+function applyYawInput() {
+  cmd[2] = Math.max(-1, Math.min(1, yawImpulse));
+  yawImpulse *= 0.82;
+  if (Math.abs(yawImpulse) < 1e-3) yawImpulse = 0;
+}
 
 errEl.textContent = '';
 hud.textContent = `${kinematics.bodies.length} body / ${meshCount} mesh`;
