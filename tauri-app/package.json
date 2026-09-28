@@ -1,0 +1,14 @@
+{
+  "name": "duck-tauri",
+  "private": true,
+  "version": "0.1.0",
+  "description": "屏幕鸭子的桌面壳：把 app/src/main/assets/duck/ 原样装进一个 Tauri 窗口",
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "tauri": "tauri"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}

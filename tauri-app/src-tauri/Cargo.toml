@@ -1,0 +1,27 @@
+[package]
+name = "duck-app"
+version = "0.1.0"
+description = "屏幕鸭子的桌面壳"
+edition = "2021"
+
+[lib]
+# crate-type 是 Tauri v2 的约定：桌面只用 rlib，留着 staticlib/cdylib 是为了将来
+# 真要出 iOS/Android 时不用回来改这一行
+name = "duck_app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+# 桌面壳不用 R8 那种激进裁剪，但 release 二进制默认带一堆调试信息，压一下
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

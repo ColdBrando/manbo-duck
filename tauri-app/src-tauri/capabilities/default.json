@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "鸭子窗口的默认权限。这一版是纯静态加载，JS 侧不调任何 IPC，core:default 是够的；将来接 agent 桥（推 setFrame / 收语音）时再往上加。",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

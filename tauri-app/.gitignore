@@ -1,0 +1,7 @@
+node_modules/
+
+# Rust 产物。target/ 第一次编就上 G 字节，绝不能进库
+src-tauri/target/
+
+# Tauri 构建时生成的权限 schema，跟着 target 一起重生
+src-tauri/gen/
