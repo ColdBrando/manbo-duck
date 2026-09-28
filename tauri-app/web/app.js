@@ -182,34 +182,125 @@ const gltf = await new GLTFLoader().loadAsync('./robot/microduck.glb');
 // GLTFLoader 会过一遍 PropertyBinding.sanitizeNodeName()，它把 [ ] . : / 从名字里**删掉**，
 // 于是 "ankle_left.stl" 到了这边就成了 "ankle_leftstl"。两边用同一条规则当键。
 const san = (s) => String(s).replace(/\s/g, '_').replace(/[\[\]\.:\/]/g, '');
+
+// 焊点 + 折边法线。
+//
+// STL 是"三角汤"：顶点不共享、也没有法线，three.js 只能按**面**算法线 —— 曲面上
+// 就会看出一块块的平面、高光碎成一片片（放大头壳特别明显）。
+// 先按位置焊点（1e-4 m），再按 36° 折边阈值重算法线：夹角小于它的相邻面算同一个
+// 光滑面（圆角变光滑），大于它的保留硬边（棱线仍然是硬的）。官方模拟器也是这么做的。
+//
+// 必须先把 GLB 自带的 normal/uv 删掉 —— 否则焊点时"法线不同"会把该合并的顶点拦下来，
+// 等于白焊。
+const { mergeVertices } = await import('./lib/three/utils/BufferGeometryUtils.js');
+const smoothCache = new Map();
+function smoothGeometry(geo) {
+  if (smoothCache.has(geo)) return smoothCache.get(geo);
+  const g = geo.clone();
+  g.deleteAttribute('normal');
+  g.deleteAttribute('uv');
+  const welded = mergeVertices(g, 1e-4);
+  // 不按折边拆：toCreasedNormals 在这份网格上会出大片斑块（实测过，见 README）。
+  // 直接全平滑，圆角变光滑、代价是细棱线也会被抹圆一点。
+  welded.computeVertexNormals();
+  g.dispose();
+  smoothCache.set(geo, welded);
+  return welded;
+}
+
+const tSmooth = performance.now();
 const geomsByName = new Map();
 gltf.scene.traverse(o => {
   if (!o.isMesh) return;
-  if (o.name) geomsByName.set(san(o.name), o.geometry);
-  if (o.parent && o.parent.name) geomsByName.set(san(o.parent.name), o.geometry);
+  const g = smoothGeometry(o.geometry);
+  if (o.name) geomsByName.set(san(o.name), g);
+  if (o.parent && o.parent.name) geomsByName.set(san(o.parent.name), g);
 });
+console.log('焊点+平滑法线：' + geomsByName.size + ' 个网格，' + (performance.now() - tSmooth).toFixed(0) + ' ms');
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x0b0f14);
 
-scene.add(new THREE.HemisphereLight(0xbcd4ff, 0x2a2620, 1.1));
-const key = new THREE.DirectionalLight(0xffffff, 2.2);
+// ── 环境光照 ─────────────────────────────────────────────────────────────────
+// **这一块是"塑料感"的关键。** MeshStandardMaterial 的 roughness / metalness
+// 全靠环境反射才有东西可反 —— 没有 scene.environment 时金属度几乎不起作用、
+// 高光是死的，表现就是"发闷、发糊、像石膏"。
+//
+// 用 PMREM 卷一个**程序化的小房间**，不引外部 HDR 文件（省几 MB，参数也全在代码里）。
+// 亮度按我们这套暗色调调：上前方一盏主光板、侧面一盏冷光、下后方一盏暖补光，
+// 让壳体的高光和转角的轮廓都有东西可反。
+function buildEnvMap(r) {
+  const pmrem = new THREE.PMREMGenerator(r);
+  const room = new THREE.Scene();
+  const shellGeo = new THREE.BoxGeometry(10, 10, 10);
+  const shellMat = new THREE.MeshBasicMaterial({ color: 0x1b2532, side: THREE.BackSide });
+  room.add(new THREE.Mesh(shellGeo, shellMat));
+
+  const disposables = [];
+  const panel = (hex, intensity, w, h, pos) => {
+    const g = new THREE.PlaneGeometry(w, h);
+    const m = new THREE.MeshBasicMaterial({ color: new THREE.Color(hex).multiplyScalar(intensity) });
+    const mesh = new THREE.Mesh(g, m);
+    mesh.position.set(pos[0], pos[1], pos[2]);
+    mesh.lookAt(0, 0, 0);
+    room.add(mesh);
+    disposables.push(g, m);
+  };
+  panel(0xffffff, 2.6, 3.0, 3.0, [ 0.8,  1.4,  1.8]);   // 主光：上前方
+  panel(0xbfd8ff, 1.2, 4.5, 2.5, [-2.4,  0.8,  0.6]);   // 侧冷光
+  panel(0xffd9b0, 0.9, 3.5, 2.5, [ 0.6, -2.6,  0.8]);   // 下后方暖补光
+
+  const rt = pmrem.fromScene(room, 0.02);
+  pmrem.dispose();
+  shellGeo.dispose(); shellMat.dispose();
+  disposables.forEach(d => d.dispose());
+  return rt.texture;
+}
+scene.environment = buildEnvMap(renderer);
+scene.environmentIntensity = 0.85;   // 再高就把暗色调冲淡了
+
+// 环境贴图已经提供了大部分漫反射，半球光只留一点点免得暗部死黑
+scene.add(new THREE.HemisphereLight(0xbcd4ff, 0x2a2620, 0.25));
+const key = new THREE.DirectionalLight(0xffffff, 1.9);
 key.position.set(0.6, 0.9, 1.4);
 key.castShadow = true;
 key.shadow.mapSize.set(1024, 1024);
 const sc = key.shadow.camera;
 sc.left = -0.6; sc.right = 0.6; sc.top = 0.6; sc.bottom = -0.6; sc.near = 0.1; sc.far = 4;
 scene.add(key);
-const rim = new THREE.DirectionalLight(0xffe9c9, 0.9);
+const rim = new THREE.DirectionalLight(0xffe9c9, 0.8);
 rim.position.set(-0.8, -0.5, 0.7);
 scene.add(rim);
 
-// 地面：只为让阴影落得下来。故意做得比鸭子大不少，走出去也不会掉出地面。
+// 地面：既让阴影落得下来，也接环境贴图的反射当"地台"。比鸭子大很多，走出去不掉出地面。
 const floor = new THREE.Mesh(
   new THREE.PlaneGeometry(8, 8),
-  new THREE.MeshStandardMaterial({ color: 0x1a2632, roughness: 0.95, metalness: 0 }));
+  new THREE.MeshStandardMaterial({ color: 0x0f151d, roughness: 0.85, metalness: 0.05 }));
 floor.receiveShadow = true;
 scene.add(floor);
+
+// ── 材质分档 ─────────────────────────────────────────────────────────────────
+// 按 MJCF 的**材质名**分，不按颜色猜 —— 名字很有语义（right_shell / xl330 /
+// elec_rpi_robot_hat_pcb / soft_mouth_top），一眼就知道是什么件。
+// 名字由 tools/mjcfkin/mjcf_to_kinematics.py 带出来（geom.mat）。
+function materialFor(geom) {
+  const c = geom.color || [1, 1, 1, 1];
+  const n = (geom.mat || '').toLowerCase();
+  let roughness = 0.5, metalness = 0.05;          // 默认：中灰尼龙结构件
+  if (/shell|foot_|ankle_|sole_|jaw|noenoeil/.test(n)) {
+    roughness = 0.28; metalness = 0.0;            // 光面注塑外壳：高光要锐
+  } else if (/soft|mouth/.test(n)) {
+    roughness = 0.8; metalness = 0.0;             // 软胶：几乎不反光
+  } else if (/pcb|elec_/.test(n)) {
+    roughness = 0.62; metalness = 0.1;            // 电路板：哑光
+  } else if (/trunk_base|yaw|bearing|motor_support|xl330|np_f970|neck_pitch|lens|speaker/.test(n)) {
+    roughness = 0.4; metalness = 0.45;            // 深色结构件 / 舵机：带金属感
+  }
+  return new THREE.MeshStandardMaterial({
+    color: new THREE.Color(c[0], c[1], c[2]),
+    roughness, metalness,
+  });
+}
 
 // 每个 body 一个 Group，平铺挂在 scene 下；geom 按它在自己 body 系里的位姿挂进去。
 const bodyGroups = new Map();
@@ -221,12 +312,7 @@ for (const b of kinematics.bodies) {
   for (const geom of b.geoms) {
     const geo = geomsByName.get(san(geom.mesh));
     if (!geo) continue;
-    const c = geom.color || [1, 1, 1, 1];
-    const mat = new THREE.MeshStandardMaterial({
-      color: new THREE.Color(c[0], c[1], c[2]),
-      roughness: 0.45, metalness: 0,
-    });
-    const m = new THREE.Mesh(geo, mat);
+    const m = new THREE.Mesh(geo, materialFor(geom));
     m.castShadow = true; m.receiveShadow = true;
     m.position.fromArray(geom.pos);
     // MJCF 的四元数是 w 在前，three.js 是 (x,y,z,w)

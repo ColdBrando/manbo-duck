@@ -64,12 +64,17 @@ def body_geoms(model: mujoco.MjModel, bid: int) -> list[dict]:
         # geom_rgba 只是个占位（实测全是 0.5,0.5,0.5），真颜色在 mat_rgba 里。
         matid = model.geom_matid[g]
         rgba = model.mat_rgba[matid] if matid >= 0 else model.geom_rgba[g]
+        # 材质名也带上：渲染侧靠它分材质（壳体 / 电机 / PCB / 软胶），比按颜色猜准得多。
+        # MJCF 里叫 "right_shell_material" 这种，一看就知道是什么件。
+        matname = (mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_MATERIAL, matid)
+                   if matid >= 0 else None)
         out.append({
             "type": "mesh",
             "mesh": mesh_file + ".stl",   # MJCF 里网格名不带扩展名，渲染侧要文件名
             "pos": [round(float(v), 7) for v in model.geom_pos[g]],
             "quat": [round(float(v), 7) for v in model.geom_quat[g]],
             "color": [round(float(v), 6) for v in rgba],
+            "mat": matname,
         })
     return out
 
