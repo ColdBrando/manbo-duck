@@ -212,17 +212,20 @@ class SpecAssertionsTest {
     }
 
     @Test
-    fun `13 velocity 走 1 秒 z 约 0_2`() {
+    fun `13 velocity 走 1 秒 z 约 0_186（起步有加速 不是瞬时匀速）`() {
         val motion = DuckMotion()
         motion.sample(0)
         motion.velocity(0.2f, 0f, 0f)
         var frame = motion.sample(0)
         for (t in 50..1000 step 50) frame = motion.sample(t.toLong())
-        assertEquals(0.2f, frame.z, 0.01f)
+        // 2026-09-28（emin 授权）改成"起停有一阶滞后"之后，同样 0.2 m/s 走 1 秒走不到整整
+        // 0.2 米：起步那 ACCEL_TAU 秒是在用时间换速度，少走的部分约等于 V·τ。
+        // 具体值跟采样率有关（离散趋近），所以断言一个区间。
+        assertTrue("z=${frame.z}，起步该吃掉一点", frame.z in 0.17f..0.199f)
     }
 
     @Test
-    fun `14 stop 之后 z 不再变化`() {
+    fun `14 stop 之后滑一小段就停住`() {
         val motion = DuckMotion()
         motion.sample(0)
         motion.velocity(0.2f, 0f, 0f)
@@ -230,8 +233,15 @@ class SpecAssertionsTest {
         for (t in 50..1000 step 50) frame = motion.sample(t.toLong())
         val zAtStop = frame.z
         motion.stop()
-        for (t in 1050..2000 step 50) frame = motion.sample(t.toLong())
-        assertEquals(zAtStop, frame.z, 0.001f)
+        var z500 = zAtStop
+        for (t in 1050..1500 step 50) z500 = motion.sample(t.toLong()).z
+        val coast = z500 - zAtStop
+        // 一阶滞后：停下来还会往前滑 V·τ 那么一小段 —— 那是"刹车"，不是漂移
+        assertTrue("滑太远：$coast", coast in 0.002f..0.04f)
+        // 但必须真的停住：半秒之后一点都不许再动
+        var z1000 = z500
+        for (t in 1550..2000 step 50) z1000 = motion.sample(t.toLong()).z
+        assertEquals("半秒之后还在动", z500, z1000, 0.001f)
     }
 
     @Test

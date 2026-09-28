@@ -21,6 +21,10 @@ var params = new URLSearchParams(location.search);
 var raw = params.get('pose') || '';
 // 逗号分隔的 15 个数（不用方括号，免得过 adb shell 时被吃掉）
 var pose = raw ? raw.replace(/^\[|\]$/g, '').split(',').map(Number) : null;
+// 可选机位：?view=2（鸭子左侧）、6（右侧）、4（正后方）……默认 0 = 正前方。
+// 核对"往前倾 / 往后坐"这种要看侧面的符号时用得上。
+var view = params.get('view');
+if (view !== null) window.duck.setView(Number(view));
 // 屏蔽 app 每 33 ms 推来的帧，否则会把固定姿态覆盖掉
 window.duck.setFrame = function () {};
 
