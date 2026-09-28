@@ -291,13 +291,17 @@ function materialFor(geom) {
   const n = (geom.mat || '').toLowerCase();
   let roughness = 0.5, metalness = 0.05;          // 默认：中灰尼龙结构件
   let shell = false;
-  if (/shell|foot_|ankle_|sole_|jaw|noenoeil/.test(n)) {
+  if (/^lens_material$/.test(n)) {
+    // 镜头：玻璃感 —— 极低粗糙度 + 清漆。不能跟"深色结构件"那档走，那个带金属度，
+    // 而镜头是介质不是金属。（m12_lens_holder 是镜头的塑料座，不算，走结构件那档）
+    roughness = 0.08; metalness = 0.0; shell = true;
+  } else if (/shell|foot_|ankle_|sole_|jaw|noenoeil/.test(n)) {
     roughness = 0.28; metalness = 0.0; shell = true;   // 光面注塑外壳：高光要锐
   } else if (/soft|mouth/.test(n)) {
     roughness = 0.8; metalness = 0.0;             // 软胶：几乎不反光
   } else if (/pcb|elec_/.test(n)) {
     roughness = 0.62; metalness = 0.1;            // 电路板：哑光
-  } else if (/trunk_base|yaw|bearing|motor_support|xl330|np_f970|neck_pitch|lens|speaker/.test(n)) {
+  } else if (/trunk_base|yaw|bearing|motor_support|xl330|np_f970|neck_pitch|speaker/.test(n)) {
     roughness = 0.4; metalness = 0.45;            // 深色结构件 / 舵机：带金属感
   }
   // 光面外壳用 MeshPhysicalMaterial 加一层清漆：真实的注塑亮件外面有一层透明漆，
