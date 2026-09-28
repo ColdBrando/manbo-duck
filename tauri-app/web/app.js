@@ -400,13 +400,19 @@ let busy = false;
 async function tick() {
   requestAnimationFrame(tick);
   const now = performance.now();
-  acc += Math.min(100, now - last) / 1000;   // 单帧 dt 掐在 100 ms 内，挂起回来别瞬移
+  const dtSec = Math.min(100, now - last) / 1000;   // 单帧 dt 掐在 100 ms 内，挂起回来别瞬移
+  acc += dtSec;
   last = now;
+  // STATIC 不跑控制循环，simT 就不会动 —— 而截图是按 simT 触发的，不动就永远不触发。
+  // 所以冻结模式下照样推进时间轴，只是不推进物理。
+  if (STATIC) simT += dtSec;
 
   if (busy) return;                          // 推理是异步的，别重入
   applyYawInput();                           // 要在控制步之前：指令得进这一拍的观测
   let n = 0;
-  while (acc >= CTRL_DT && n < 8) {
+  // STATIC：连物理都不推进。光清指令不够 —— 策略仍会让鸭子在原地缓慢沉降/漂移，
+  // 截图时间点又不定，两次拍的就不是同一个位置，画质 A/B 全部作废（踩过）。
+  while (!STATIC && acc >= CTRL_DT && n < 8) {
     busy = true;
     await controlStep();
     busy = false;
