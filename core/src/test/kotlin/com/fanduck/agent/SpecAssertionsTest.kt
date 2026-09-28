@@ -164,7 +164,7 @@ class SpecAssertionsTest {
     }
 
     @Test
-    fun `8 vx 等于 1 时发出去的是 0_2`() {
+    fun `8 vx 等于 1 时发出去的是 0_4`() {
         val cloud = FakeCloud(
             listOf("Thought: 走\nFinal Answer: {\"say\":\"走\",\"actions\":[{\"name\":\"velocity\",\"vx\":1,\"ms\":300}]}"),
         )
@@ -173,7 +173,8 @@ class SpecAssertionsTest {
         val st = state(cloud, robot, sleep = { slept += it })
         onHeard("过来", st)
         assertEquals(1, robot.velocityCalls.size)
-        assertEquals(0.2f, robot.velocityCalls[0].vx, 0.0001f)
+        // 2026-09-28：上限从 0.2 提到 0.4（真机训练范围），不然走不出策略的 0.3 死区
+        assertEquals(MAX_VX, robot.velocityCalls[0].vx, 0.0001f)
         assertEquals(listOf(300), slept)   // 跑起来了才等这一步走完
         assertTrue(didTexts(st).any { it.contains("ok") })
     }

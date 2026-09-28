@@ -9,7 +9,7 @@ captures/
 .cxx
 *.apk
 *.aab
-tools/duckmesh/node_modules/
+node_modules/
 tools/duckmesh/package-lock.json
 
 # 方案设计（契约 + 内部决策记录，不进公开仓库；emin 2026-09-27 指定）

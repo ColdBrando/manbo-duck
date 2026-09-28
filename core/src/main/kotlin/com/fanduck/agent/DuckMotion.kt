@@ -66,6 +66,12 @@ const val NECK_NOD = 0.05f
 const val BREATH_NECK = 0.030f
 
 /**
+ * 从"手写步态"切到"训出来的步态"要多久（秒）。
+ * 两边都是周期动作，硬切会看见跳变；0.2 秒够糊过去，也不至于拖。
+ */
+const val CLIP_FADE_S = 0.2f
+
+/**
  * 规格 §6.3。地面：Y 朝上，鸭子面朝 +Z。yaw 增大时俯视逆时针，鸭头从 +Z 转向 +X。
  * vx > 0 朝鸭头走，vy > 0 向鸭的左侧平移。
  *
@@ -92,6 +98,13 @@ class DuckMotion {
 
     /** 待机呼吸的相位（很慢的正弦，只在没在走的时候看得见）。 */
     private var breathPhase = 0f
+
+    /** 训出来的步态素材（`assets/duck/gaits.json`）。没有就一路走手写的那套。 */
+    private var gaits: GaitPack? = null
+
+    /** 素材的相位（0..1 一个周期）和它当前的权重（0 = 手写步态，1 = 全用素材）。 */
+    private var clipPhase = 0f
+    private var clipWeight = 0f
 
     private var x = 0f
     private var z = 0f
@@ -132,6 +145,15 @@ class DuckMotion {
     }
 
     /**
+     * 装上真机训出来的步态素材（`assets/duck/gaits.json` 解析出来的）。
+     * 传 null 就退回手写步态 —— 测试和没有素材的设备走那条路。
+     */
+    @Synchronized
+    fun loadGaits(pack: GaitPack?) {
+        gaits = pack
+    }
+
+    /**
      * 一帧。位置（x/z/yaw）用**平滑之后**的速度积分 —— 所以起停有加速/减速，
      * 不是"啪"地从 0 到 0.2（那看着像滑行，2026-09-28 emin 提的）。
      */
@@ -146,6 +168,7 @@ class DuckMotion {
         vySmooth += (vy - vySmooth) * k
         wzSmooth += (wz - wzSmooth) * k
 
+        val speed = sqrt(vxSmooth * vxSmooth + vySmooth * vySmooth)   // 米/秒，和真机一个量纲
         val linear = planarAmount(vxSmooth, vySmooth)
         val turn = (abs(wzSmooth) / 1f).coerceIn(0f, 1f)
         val amount = maxOf(linear, 0.35f * turn).coerceIn(0f, 1f)
@@ -173,6 +196,24 @@ class DuckMotion {
             // 只在"转身但不前进"的时候踏步
             march = (turn - linear).coerceAtLeast(0f),
         )
+        // 真机训出来的步态（有素材、而且指令大到策略真的会走的时候）。见 Gait.kt：
+        // velstand 低于约 0.3 m/s 是站着的，这里跟着它，行为才和真机一致。
+        val clip = if (speed >= WALK_CLIP_MIN) {
+            gaits?.forCommand(vxSmooth, vySmooth, wzSmooth)
+        } else {
+            null
+        }
+        val fade = (dt / CLIP_FADE_S).coerceIn(0f, 1f)
+        if (clip != null) {
+            clipPhase += (clip.hz / clip.frames) * dt
+            clipWeight += (1f - clipWeight) * fade
+            val clipJoints = clip.frameAt(clipPhase, base)
+            for (i in 0 until 15) {
+                joints[i] += (clipJoints[i] - joints[i]) * clipWeight
+            }
+        } else {
+            clipWeight += (0f - clipWeight) * fade
+        }
         // 评审 P2：gaze 的 ±45° 是相对角，叠加 base[6]（站立 20°）后超过 §6 表里声明的 ±45° 物理范围。
         // 按规格原文实现，要不要改成 ±(45° - base[6]) 由你定。
         joints[6] = base[6] + gazePitchDeg * Math.PI.toFloat() / 180f

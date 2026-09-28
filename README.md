@@ -31,8 +31,10 @@
   只发经历的文字、不发媒体）。「记得」进每一次意图 —— 反复提到的事会刷新时间活着，
   久不提的自己变旧被淘汰。
 - **会动**：15 个关节角 + 地面位置，30 fps 推到 WebView 里的 three.js。站、坐、走、转头、张嘴，
-  外加一段《哈基米》的舞（122 BPM，八拍一循环）。走路不是匀速滑行：起停有加速/减速，
-  步频跟着速度走（慢走是小步倒得密，不是慢放），站着还有很轻的呼吸。
+  外加一段《哈基米》的舞（122 BPM，八拍一循环）。
+- **走的是真机训出来的步态**：`velstand.onnx`（Pollen 官方策略）在 MuJoCo + 真机电机模型里
+  跑出来的一整个周期，烘成 `assets/duck/gaits.json`（20 帧 / 400 ms / 2.5 Hz）。
+  不是手调的正弦 —— 连头跟着左右摆都是策略自己算的配平动作。见 `tools/duckgait/`。
 - **能查**：一个日志页，把「这一轮发给云端的全部内容」「模型每一轮的原话」「拍到的帧」摊开看。
 
 ## 现在到哪一步
@@ -41,7 +43,7 @@
 
 | | 状态 |
 |---|---|
-| 纯逻辑层（事件 / 记忆检索 / 长期记忆 / ReAct 主循环 / 轨迹压缩 / 姿态 / 识别源 / 检测结果） | ✅ `./gradlew :core:test` 98 条断言，秒级 |
+| 纯逻辑层（事件 / 记忆检索 / 长期记忆 / ReAct 主循环 / 轨迹压缩 / 姿态 / 识别源 / 检测结果 / 步态素材） | ✅ `./gradlew :core:test` 110 条断言，秒级 |
 | 屏幕上的鸭子（真机 microduck 网格，9.7 万三角形） | ✅ 8 个观察机位、自动贴地、正面软跟随机位 |
 | 语音输入 | ✅ 按住说话 + 静音窗口；退到后台切成连续听（前台服务持有麦克风） |
 | 相机 + 距离 | ✅ 每 2 秒一拍 + 本机检测器（ML Kit，模型随 APK、不联网），盖住听筒会触发近距离拒绝 |
@@ -81,6 +83,20 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 adb shell am start -n com.fanduck.agent/.MainActivity
 ```
 
+### 桌面壳（Tauri）
+
+同一只鸭子也能站在桌面上。`tauri-app/` 是个 Tauri 壳，`frontendDist` 直接指到
+`app/src/main/assets/duck/` —— **一份 duck.js 两边用**，不是复制出来的第二份。
+
+```bash
+cd tauri-app
+npm install
+npm run dev          # 开窗口看鸭子；npm run build 出 .app/.dmg
+```
+
+这一版只有"能看见"那一层：渲染 + 窗口 resize。语音、相机、云端、agent 循环都还在 Android 那边，
+桌面上"按住说话"这个交互也得重新想（没有触摸屏）。细节见 [`tauri-app/README.md`](tauri-app/README.md)。
+
 四个容易踩的：
 
 - 改 `app/src/main/assets/` 里的东西（`duck.js`、`duck-meshes.js`）**也必须重新 `assembleDebug`**：
@@ -94,8 +110,11 @@ adb shell am start -n com.fanduck.agent/.MainActivity
 ## 目录
 
 ```
-core/            纯 Kotlin/JVM：事件、记忆检索、ReAct 主循环、姿态计算、静音窗口、舞步
+core/            纯 Kotlin/JVM：事件、记忆检索、ReAct 主循环、姿态计算、静音窗口、舞步、步态素材
 app/             Android 适配层：WebView 鸭子 / TTS / 语音 / Camera2 / DeepSeek HTTPS / Compose 日志页
+tauri-app/       桌面壳：把 app/src/main/assets/duck/ 原样装进 Tauri 窗口（见它自己的 README）
+tools/duckmesh/  离线网格管线（真机 STL → duck-meshes.js）
+tools/duckgait/  离线步态管线（真机策略 → gaits.json，见它自己的 README）
 tools/duckmesh/  离线网格管线：microduck 的 MJCF + STL → duck-meshes.js（见它自己的 README）
 doc/             细节文档（见下）
 ```

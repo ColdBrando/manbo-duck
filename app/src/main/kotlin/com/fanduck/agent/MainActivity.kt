@@ -88,6 +88,7 @@ class MainActivity : Activity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         motion = DuckMotion()
+        motion.loadGaits(loadGaits())
         robot = ScreenRobot(motion, this) { on ->
             mute.noteSpeaking(SystemClock.uptimeMillis(), on)
             // 手测时对表用：说话期间和说完 800 ms 内，识别结果都该被丢掉（duck-voice 会打出来）
@@ -279,6 +280,24 @@ class MainActivity : Activity() {
         Log.i(SENSE_TAG, if (size > 0) "拍了 latest.jpg：$size 字节" else "还没有帧（相机没开或没权限）")
     }
 
+    /**
+     * 真机训出来的步态素材（`assets/duck/gaits.json`，见 `tools/duckgait/bake_gait.py`）。
+     * 读不到或者解析不了就退回手写步态 —— 走不起来是小事，崩了是大事。
+     */
+    private fun loadGaits(): GaitPack? = try {
+        val text = assets.open(GAITS_ASSET).bufferedReader().use { it.readText() }
+        val pack = parseGaitPack(text)
+        Log.i(
+            MOTION_TAG,
+            if (pack == null) "步态素材没解析出来，用手写步态"
+            else "步态素材：${pack.clips.joinToString { c -> "${c.name} ${c.frames} 帧 / ${c.periodMs.toInt()} ms" }}",
+        )
+        pack
+    } catch (e: Exception) {
+        Log.i(MOTION_TAG, "没有步态素材（${e.message}），用手写步态")
+        null
+    }
+
     /** debug 面板的「日志」：打开日志页（Compose 写的，看多模态上下文和每一轮回话）。 */
     private fun openLog() {
         // 先记下来再跳：日志页盖上来会让本页 pause，那不是"退到后台"（见 onPause）
@@ -364,6 +383,10 @@ class MainActivity : Activity() {
         const val SENSE_TAG = "duck-sense"
         const val CLOUD_TAG = "duck-cloud"
         const val MEMORY_TAG = "duck-memory"
+        const val MOTION_TAG = "duck-motion"
+
+        /** 真机训出来的步态（`tools/duckgait/bake_gait.py` 烘的）。 */
+        const val GAITS_ASSET = "duck/gaits.json"
     }
 }
 

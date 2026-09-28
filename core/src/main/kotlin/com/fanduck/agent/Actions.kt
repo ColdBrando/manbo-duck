@@ -4,14 +4,24 @@ package com.fanduck.agent
 
 fun clamp(value: Float, lo: Float, hi: Float): Float = minOf(hi, maxOf(lo, value))
 
+/**
+ * 速度的上下限（米/秒、弧度/秒）。**2026-09-28 从 ±0.2 提到 ±0.4** —— 这是真机的数：
+ * 训练时 `lin_vel_x` 的范围就是 ±0.4（`microduck_velocity_env_cfg.py`），
+ * 而真机训出来的步态**低于约 0.3 m/s 就选择站着**（实测 0.25 站、0.30 走）。
+ * 上限还卡在 0.2 的话，鸭子永远走不出那个死区，接步态等于白接。
+ */
+const val MAX_VX = 0.4f
+const val MAX_VY = 0.3f
+const val MAX_WZ = 1.5f
+
 /** 返回 null 表示名单外的动作，不发送。 */
 fun clampAction(action: RobotAction): RobotAction? {
     return when (action.name) {
         "stop", "stand", "sit" -> action
         "velocity" -> action.copy(
-            vx = clamp(action.vx, -0.2f, 0.2f),
-            vy = clamp(action.vy, -0.1f, 0.1f),
-            wz = clamp(action.wz, -1f, 1f),
+            vx = clamp(action.vx, -MAX_VX, MAX_VX),
+            vy = clamp(action.vy, -MAX_VY, MAX_VY),
+            wz = clamp(action.wz, -MAX_WZ, MAX_WZ),
             ms = clamp(action.ms.toFloat(), 100f, 2000f).toInt(),
         )
         "gaze" -> action.copy(
