@@ -145,6 +145,59 @@ tauri-app/
 
 网格模型的许可见 `app/src/main/assets/duck/duck-meshes.LICENSE.txt`（CC BY-SA-NC）。
 
+## 手机上能不能跑（2026-09-28 实测，未完成）
+
+在 `duck34`（API 34 google_apis，arm64）模拟器上实测过一轮。用**执行进度标记**定位
+（页面 `fetch('./_mark/<阶段>')`，请求会落在 HTTP 服务器日志里）——比截图可靠，
+Android 的 `screencap` 读不到硬件合成层。
+
+**已经证明能跑通的**（标记一个个走到）：
+
+```
+✓ mujoco-loaded       MuJoCo WASM 加载
+✓ model-compiled      MJCF 编译完成（38 个网格进 VFS）
+✓ onnx-session-ready  ONNX 会话建立
+✓ three-imported / glb-loaded / rig-built
+✓ before-tick         进渲染循环
+```
+
+跑起来时 HUD 读到 **60 fps**、鸭子在走（`x/y` 在变）、直立度 -0.998。
+所以 WASM 物理 + 推理这一层在 Android WebView 上是通的，**不需要 SharedArrayBuffer**
+（我们用单线程构建，因此不需要 COOP/COEP 响应头）。
+
+**唯一没过的一关是 WebGL 上下文**。三点观察：
+
+1. 一开始 `duck34` 的 `hw.gpu.enabled = no`，Chrome 的 GPU 进程在崩溃循环
+   （`Reinitialized the GPU process after a crash`），页面连 CSS 都渲染不出来。
+2. 打开 GPU（`hw.gpu.mode = host`，宿主是 Apple M4）冷启动后：
+   - **WebGL2 可用**（`Android Emulator OpenGL ES Translator (Apple M4)`），
+     **WebGL1 不可用**
+   - 各种上下文属性组合都 OK，**连 three.js 的默认参数集也 OK**
+   - 一个只 `import 'three'` + `new WebGLRenderer()` + 渲染一个方块的最小页面**完全正常**
+   - 但我们的应用在建 renderer 时报 `Error creating WebGL context.`
+3. 把 renderer 提到最前面建（在加载那 55 MB 之前）之后，进度**一路走到了渲染循环**，
+   HUD 读到 60 fps。所以怀疑是**资源压力**（内存/GPU 资源）导致晚建上下文失败。
+
+**但最后一次复验又失败了**，而且那次唯一的差别是打开了 `preserveDrawingBuffer`
+（为了从画布读回像素验证 WebGL 真的在画）。所以这条还没定论。
+
+**明天要做的**：
+
+- [ ] 把 renderer 提前这个改动在**干净状态**下重跑三次，确认不是偶然
+- [ ] 单独验 `preserveDrawingBuffer: true` 是不是会触发失败（它会让 Chrome 多留一份缓冲）
+- [ ] 从画布读回像素，确认 WebGL **真的在画**（现在只有"HUD 在刷新"这一个证据，
+      截图读不到硬件合成层）
+- [ ] 上面都过了再上**真机**——模拟器的图形栈终究是转译层，帧率不代表真机
+
+**如果真要在手机上落地，还有四件工程活**（不只是验证）：
+
+1. **资源体积**：55 MB 要进 APK（10 MB mujoco.wasm + 14 MB ort wasm + 20 MB STL +
+   7.4 MB GLB）。GLB 那 431k 三角面对低端机偏重
+2. **内存**：2.5 GB 的模拟器跑到最后只剩 346 MB 空闲，这个 payload 不轻
+3. **输入重做**：现在全是鼠标。触摸要重新映射（单指拖=转向、双指拖=镜头、捏合=远近）
+4. **会取代 Kotlin 那套**：`DuckMotion.kt` / `Gait.kt` / 烘好的 `gaits.json` 整条路都不需要了 ——
+   这是架构决定，不是加功能
+
 ## 现在还没做
 
 | | 状态 |

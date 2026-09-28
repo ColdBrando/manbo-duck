@@ -52,6 +52,30 @@ const telShot = (tag) => {
   } catch (_) {}
 };
 
+// ── WebGL 上下文：**在最前面就建** ───────────────────────────────────────────
+// 为什么提前：实测在 Android 模拟器上，等把 55 MB 重资源（10 MB mujoco.wasm +
+// 20 MB 网格进 VFS + 14 MB ort.wasm + 7.4 MB GLB／43 万三角面）都吃进内存之后
+// 再建 WebGL 上下文，three.js 会报 `Error creating WebGL context.`；
+// 把上下文提到最前面之后，同一台模拟器上执行进度能一路走到渲染循环。
+// （还没在真机上复验，见 README 的待办。）
+const THREE = await import('three');
+
+// MJCF 是 z 朝上，three.js 默认 y 朝上。这里不动数据、也不转场景，直接把相机的
+// up 设成 z —— 屏幕上的坐标和 MJCF 一一对应，对照调试时少绕一层。
+const camera = new THREE.PerspectiveCamera(38, innerWidth / innerHeight, 0.01, 20);
+camera.up.set(0, 0, 1);
+
+// preserveDrawingBuffer：只有排障要读回画面时才开（不然缓冲已被清掉，采到永远是黑）。
+// 平时关着，省一次拷贝。
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: TELEMETRY });
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.0;
+document.body.appendChild(renderer.domElement);
+
 // ── 物理 ─────────────────────────────────────────────────────────────────────
 const mj = await (await import('./lib/mujoco.js')).default();
 
@@ -135,7 +159,6 @@ async function controlStep() {
 // 用 MuJoCo 的**世界变换**直接摆每一块（body 的 xpos/xquat 就是世界位姿），
 // 不自己做正运动学、也不按 kinematics 的父子关系建树。
 // 这样渲染和物理不可能漂 —— 摆的就是 MuJoCo 刚算出来的那一份。
-const THREE = await import('three');
 const { GLTFLoader } = await import('./lib/three/addons/GLTFLoader.js');
 
 const kinematics = await (await fetch('./robot/kinematics.json')).json();
@@ -153,22 +176,6 @@ gltf.scene.traverse(o => {
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x0b0f14);
-
-// MJCF 是 z 朝上，three.js 默认 y 朝上。这里不动数据、也不转场景，直接把相机的
-// up 设成 z —— 屏幕上的坐标和 MJCF 一一对应，对照调试时少绕一层。
-const camera = new THREE.PerspectiveCamera(38, innerWidth / innerHeight, 0.01, 20);
-camera.up.set(0, 0, 1);
-
-// preserveDrawingBuffer：只有排障要读回画面时才开（不然缓冲已被清掉，采到永远是黑）。
-// 平时关着，省一次拷贝。
-const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: TELEMETRY });
-renderer.setSize(innerWidth, innerHeight);
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
-renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.0;
-document.body.appendChild(renderer.domElement);
 
 scene.add(new THREE.HemisphereLight(0xbcd4ff, 0x2a2620, 1.1));
 const key = new THREE.DirectionalLight(0xffffff, 2.2);
