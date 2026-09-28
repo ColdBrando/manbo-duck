@@ -72,7 +72,10 @@ const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffe
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-renderer.toneMapping = THREE.ACESFilmicToneMapping;
+// 色调映射：三种都试过（同姿态同机位比过，见 README）。ACES 高光滚降最柔但橙带去饱和；
+// AgX 最"电影感"但颜色最淡；Neutral 的颜色最接近真机参考图 —— 鸭子是产品渲染，
+// 颜色读得准比电影感重要，所以选 Neutral。
+renderer.toneMapping = THREE.NeutralToneMapping;
 renderer.toneMappingExposure = 1.0;
 document.body.appendChild(renderer.domElement);
 
@@ -383,7 +386,15 @@ let nextShot = 3;      // 排障抓帧用：第 3 秒起每 6 秒传一张画面
 const WALK_VX = 0.4;      // velstand 烘步态时用的同一个指令速度
 cmd[0] = WALK_VX;
 
-if (STATIC) { mj.mj_resetData(model, data); mj.mj_forward(model, data); }
+// STATIC 是画质调参用的**冻结模式**：姿态冻在 qpos0、指令清零，光照和取景才稳定。
+// 光 reset 姿态不够 —— 控制循环还在跑，鸭子会带着 WALK_VX 走开，两次截图的鸭子位置
+// 就不一样，而主光位置是固定的（只有 target 跟着走），光照角度跟着变，A/B 就没法比。
+if (STATIC) {
+  cmd.fill(0);                                   // 不跑
+  mj.mj_resetData(model, data);
+  mj.mj_forward(model, data);
+  syncBodies(); followCam(true);                 // 相机立刻到位，别从原点飘过去
+}
 
 let busy = false;
 async function tick() {
